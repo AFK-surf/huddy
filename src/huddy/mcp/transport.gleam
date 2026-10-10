@@ -551,7 +551,7 @@ fn dispatch(
     "logging/setLevel" -> ok([])
     "tools/list" ->
       ok([
-        #("tools", json.preprocessed_array(tools.definitions(ctx))),
+        #("tools", json.preprocessed_array(tools.definitions(ctx, principal))),
         ..cacheable
       ])
     "tools/call" -> {
@@ -639,6 +639,12 @@ fn dispatch(
               ),
               #("name", json.string("agent")),
               #("title", json.string("One agent's items")),
+              #(
+                "description",
+                json.string(
+                  "An agent's goal, open tasks and decisions, by owner handle, agent name and project.",
+                ),
+              ),
               #("mimeType", json.string("text/plain")),
             ]),
           ]),

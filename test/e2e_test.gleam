@@ -395,6 +395,53 @@ pub fn mcp_legacy_and_modern_test() {
     )
   assert unsupported.status == 400
   assert string.contains(unsupported.body, "-32022")
+  // legacy initialize: the instructions quote the configured guidelines
+  let init =
+    rpc(
+      alice,
+      [],
+      json.object([
+        #("jsonrpc", json.string("2.0")),
+        #("id", json.int(4)),
+        #("method", json.string("initialize")),
+        #(
+          "params",
+          json.object([
+            #("protocolVersion", json.string("2025-11-25")),
+            #("capabilities", json.object([])),
+            #(
+              "clientInfo",
+              json.object([
+                #("name", json.string("codex")),
+                #("version", json.string("1")),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    )
+  assert string.contains(init.body, "Keep at most 5 tasks open")
+  assert string.contains(init.body, "Keep at most 3 decisions open")
+  // tools/list: `project` is required unless the secret URL pins it
+  let list_tools = fn(url) {
+    rpc(
+      url,
+      [],
+      json.object([
+        #("jsonrpc", json.string("2.0")),
+        #("id", json.int(5)),
+        #("method", json.string("tools/list")),
+      ]),
+    ).body
+  }
+  let alice_tools = list_tools(alice)
+  assert string.contains(
+    alice_tools,
+    "\"required\":[\"project\",\"kind\",\"title\"]",
+  )
+  let bob_tools = list_tools(bob)
+  assert string.contains(bob_tools, "\"required\":[\"kind\",\"title\"]")
+  assert string.contains(bob_tools, "pinned to project \\\"api\\\"")
   // unknown secret: 404, never an OAuth challenge
   let bogus =
     rpc(base(ctx) <> "/mcp/k/nope", [], call("huddy_read", json.object([])))
