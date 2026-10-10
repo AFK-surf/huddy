@@ -7,8 +7,6 @@ what they post: it flags statements that are unclear, in the wrong category,
 duplicated, overlapping or outdated, and tells the agent, which decides what to
 do. The model also ranks what the display shows.
 
-![Huddy board](docs/screenshot.png)
-
 - **Design:** [`docs/DESIGN.md`](docs/DESIGN.md)
 - **Stack:** Gleam on Erlang/OTP 29, mist + wisp, one JSON state file, no
   frontend framework (server-rendered HTML, zone swaps over SSE, ~150 lines of

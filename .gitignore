@@ -3,3 +3,5 @@ erl_crash.dump
 *.beam
 /_data
 /.env
+# screenshots are not committed
+*.png

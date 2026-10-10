@@ -2,17 +2,8 @@
 
 > Status: **final (v1), implemented**. The decisions made along the way are
 > listed in §14; where the implementation refined the design, §15 says how.
-> The running app (demo data, decision model faked):
->
-> ![Huddy board](screenshot.png)
->
-> Every view (login, board light/dark/phone, filters, expanded and hidden
-> lists, settings, OAuth consent and error, the login e-mail in Mailpit) is in
-> [`screenshots/`](screenshots/), captured from a live run with the real Jev
-> model.
->
-> The original static mockup is kept in [`mockup.html`](mockup.html) /
-> [`mockup.png`](mockup.png).
+> The original static mockup of the display is in [`mockup.html`](mockup.html)
+> (self-contained; open it in a browser).
 
 ## 1. What Huddy is
 
