@@ -655,7 +655,7 @@ fn dispatch(
       }
       case filters {
         Ok(#(all, f)) -> {
-          let #(text, _) = tools.board_text(ctx, all, f, False, False)
+          let #(text, _) = tools.board_text(ctx, all, f, False)
           ok([
             #(
               "contents",

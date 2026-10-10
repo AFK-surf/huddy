@@ -91,13 +91,11 @@ pub type DecisionModel {
 
 pub type Thresholds {
   Thresholds(
-    wrong_kind: Float,
     unclear: Float,
     not_a_question: Float,
     duplicate: Float,
     overlap: Float,
     stale: Float,
-    injection: Float,
   )
 }
 
@@ -428,13 +426,11 @@ fn decision_model_decoder() -> Decoder(DecisionModel) {
 
 pub fn default_thresholds() -> Thresholds {
   Thresholds(
-    wrong_kind: 0.7,
     unclear: 0.4,
     not_a_question: 0.4,
     duplicate: 0.75,
     overlap: 0.7,
     stale: 0.6,
-    injection: 0.7,
   )
 }
 
@@ -456,21 +452,17 @@ fn review_decoder() -> Decoder(Review) {
   let t = d.thresholds
   use wait_ms <- opt("wait_ms", d.wait_ms, decode.int)
   use thresholds <- opt("thresholds", t, {
-    use wrong_kind <- opt("wrong_kind", t.wrong_kind, number())
     use unclear <- opt("unclear", t.unclear, number())
     use not_a_question <- opt("not_a_question", t.not_a_question, number())
     use duplicate <- opt("duplicate", t.duplicate, number())
     use overlap <- opt("overlap", t.overlap, number())
     use stale <- opt("stale", t.stale, number())
-    use injection <- opt("injection", t.injection, number())
     decode.success(Thresholds(
-      wrong_kind:,
       unclear:,
       not_a_question:,
       duplicate:,
       overlap:,
       stale:,
-      injection:,
     ))
   })
   use sweep_interval_minutes <- opt(

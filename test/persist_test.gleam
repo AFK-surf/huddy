@@ -73,6 +73,21 @@ pub fn round_trip_test() {
   assert loaded.saved_at == 42
 }
 
+pub fn retired_findings_are_dropped_on_load_test() {
+  let s = sample_state()
+  let text =
+    encoded(s)
+    |> string.replace("\"kind\":\"overlap\"", "\"kind\":\"injection\"")
+    |> string.replace(
+      "\"closed_at\":null}",
+      "\"closed_at\":null,\"flagged\":true}",
+    )
+  assert string.contains(text, "\"injection\"")
+  let assert Ok(loaded) = json.parse(text, codec.state_decoder())
+  assert dict.is_empty(loaded.findings)
+  assert dict.size(loaded.items) == dict.size(s.items)
+}
+
 pub fn missing_file_starts_empty_test() {
   let dir = support.tmp_dir()
   let assert Ok(s) = persist.load(dir <> "/huddy.json", dir <> "/backups")

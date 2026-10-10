@@ -111,14 +111,14 @@ pub fn dismissed_findings_stay_dismissed_for_that_version_test() {
   let #(s, a, _) = support.two_agents(now)
   let #(s, t) = state.create_item(s, a, support.task("Work"), now)
   let assert #(s, Some(f)) =
-    state.add_finding(s, new_finding(a, t.id, 1, model.WrongKind), now, 0)
-  let assert Ok(s) = state.dismiss_findings(s, a, [f.id], "it is a task", now)
+    state.add_finding(s, new_finding(a, t.id, 1, model.Unclear), now, 0)
+  let assert Ok(s) = state.dismiss_findings(s, a, [f.id], "it is clear", now)
   let #(_, again) =
-    state.add_finding(s, new_finding(a, t.id, 1, model.WrongKind), now, 0)
+    state.add_finding(s, new_finding(a, t.id, 1, model.Unclear), now, 0)
   assert again == None
   // a new version may be flagged again
   let #(_, v2) =
-    state.add_finding(s, new_finding(a, t.id, 2, model.WrongKind), now, 0)
+    state.add_finding(s, new_finding(a, t.id, 2, model.Unclear), now, 0)
   assert option.is_some(v2)
 }
 

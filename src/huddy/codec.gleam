@@ -5,7 +5,7 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json.{type Json}
 import gleam/list
-import gleam/option.{type Option, None}
+import gleam/option.{type Option, None, Some}
 import huddy/model.{
   type Agent, type Event, type Finding, type Item, type Judgment, type McpLink,
   type NextIds, type OAuthClient, type OAuthGrant, type OAuthToken, type State,
@@ -156,7 +156,6 @@ pub fn encode_item(i: Item) -> Json {
     #("reviewed_at", opt(i.reviewed_at, json.int)),
     #("stale_p", opt(i.stale_p, json.float)),
     #("overlaps", opt(i.overlaps, json.int)),
-    #("flagged", json.bool(i.flagged)),
     #("seen_by", opt(i.seen_by, json.int)),
     #("seen_at", opt(i.seen_at, json.int)),
     #("hidden_by", opt(i.hidden_by, json.int)),
@@ -311,7 +310,7 @@ pub fn state_decoder() -> Decoder(State) {
   use sessions <- decode.field("web_sessions", decode.list(session_decoder()))
   use agents <- decode.field("agents", decode.list(agent_decoder()))
   use items <- decode.field("items", decode.list(item_decoder()))
-  use findings <- decode.field("findings", decode.list(finding_decoder()))
+  use findings <- decode.field("findings", findings_decoder())
   use events <- decode.field("events", decode.list(event_decoder()))
   use judgments <- decode.field("judgments", decode.list(judgment_decoder()))
   use links <- decode.field("mcp_links", decode.list(link_decoder()))
@@ -432,7 +431,6 @@ pub fn item_decoder() -> Decoder(Item) {
   use reviewed_at <- nullable("reviewed_at", decode.int)
   use stale_p <- nullable("stale_p", number())
   use overlaps <- nullable("overlaps", decode.int)
-  use flagged <- decode.optional_field("flagged", False, decode.bool)
   use seen_by <- nullable("seen_by", decode.int)
   use seen_at <- nullable("seen_at", decode.int)
   use hidden_by <- nullable("hidden_by", decode.int)
@@ -454,7 +452,6 @@ pub fn item_decoder() -> Decoder(Item) {
     reviewed_at:,
     stale_p:,
     overlaps:,
-    flagged:,
     seen_by:,
     seen_at:,
     hidden_by:,
@@ -464,6 +461,20 @@ pub fn item_decoder() -> Decoder(Item) {
     updated_at:,
     closed_at:,
   ))
+}
+
+/// Checks that Huddy no longer runs; their findings are dropped on load.
+const retired_finding_kinds = ["wrong_kind", "injection"]
+
+fn findings_decoder() -> Decoder(List(Finding)) {
+  decode.list({
+    use kind <- decode.field("kind", decode.string)
+    case list.contains(retired_finding_kinds, kind) {
+      True -> decode.success(None)
+      False -> decode.map(finding_decoder(), Some)
+    }
+  })
+  |> decode.map(option.values)
 }
 
 fn finding_decoder() -> Decoder(Finding) {

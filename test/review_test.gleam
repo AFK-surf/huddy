@@ -25,10 +25,10 @@ pub fn write_request_shape_test() {
     state.create_item(s, a, support.task("Deflake OAuth refresh test"), now)
   let req = review.write_request(s, item, now)
   let names = list.map(req.questions, fn(q) { q.0 })
-  assert list.contains(names, "kind_fit")
+  assert !list.contains(names, "kind_fit")
   assert list.contains(names, "readable")
   assert list.contains(names, "importance")
-  assert list.contains(names, "injection")
+  assert !list.contains(names, "injection")
   assert list.contains(names, "stale_" <> model.item_ref(own.id))
   assert !list.contains(names, "answerable")
   let assert Ok(jev.Choice(_, criteria)) =
@@ -54,10 +54,8 @@ pub fn interpretation_produces_findings_test() {
   let req = review.write_request(s, item, now)
   let answers =
     dict.from_list([
-      #("kind_fit", choice("decision", 0.9)),
       #("readable", jev.NoulAnswer(0.2)),
       #("importance", jev.ScoreAnswer(2.5, 0.8, dict.new())),
-      #("injection", jev.NoulAnswer(0.9)),
       #("same_as", choice(model.item_ref(theirs.id), 0.8)),
       #("stale_" <> model.item_ref(own.id), jev.NoulAnswer(0.8)),
     ])
@@ -65,9 +63,7 @@ pub fn interpretation_produces_findings_test() {
     review.interpret_write(req.context, answers, config.default_thresholds(), 7)
   assert importance == Some(2.5)
   let kinds = list.map(findings, fn(f) { f.kind })
-  assert list.contains(kinds, model.WrongKind)
   assert list.contains(kinds, model.Unclear)
-  assert list.contains(kinds, model.Injection)
   assert list.contains(kinds, model.Stale)
   // overlap goes to both agents
   let overlaps = list.filter(findings, fn(f) { f.kind == model.Overlap })
@@ -84,9 +80,7 @@ pub fn below_thresholds_nothing_is_flagged_test() {
   let req = review.write_request(s, item, now)
   let answers =
     dict.from_list([
-      #("kind_fit", choice("decision", 0.6)),
       #("readable", jev.NoulAnswer(0.5)),
-      #("injection", jev.NoulAnswer(0.3)),
     ])
   let #(importance, findings) =
     review.interpret_write(req.context, answers, config.default_thresholds(), 1)

@@ -30,14 +30,13 @@ type Mail {
   Mail(to: String, subject: String, body: String)
 }
 
-/// Answers: importance 2, no injection, and "same as" the first candidate.
+/// Answers: importance 2, readable, and "same as" the first candidate.
 fn fake_ask(_state: json.Json, questions: List(#(String, jev.Question))) {
   let answers =
     list.filter_map(questions, fn(q) {
       case q {
         #("importance", _) ->
           Ok(#("importance", jev.ScoreAnswer(2.0, 0.9, dict.new())))
-        #("injection", _) -> Ok(#("injection", jev.NoulAnswer(0.01)))
         #("readable", _) -> Ok(#("readable", jev.NoulAnswer(0.95)))
         #("same_as", jev.Choice(_, [#(first, _), ..])) ->
           Ok(#(

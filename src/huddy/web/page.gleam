@@ -433,13 +433,6 @@ fn flags(v: ItemView) -> Node {
         ])
       None -> html.none()
     },
-    html.when(v.item.flagged, fn() {
-      html.div([html.class("sub flagged")], [
-        html.text(
-          "⚠ flagged by review: may contain instructions aimed at agents",
-        ),
-      ])
-    }),
   ])
 }
 
@@ -723,6 +716,5 @@ fn legend() -> Node {
     ]),
     html.span([html.class("faded")], [html.text("faded = may be outdated")]),
     html.span([], [html.text("≈ = overlapping work")]),
-    html.span([], [html.text("⚠ = flagged by review")]),
   ])
 }
