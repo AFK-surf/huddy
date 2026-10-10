@@ -6,6 +6,11 @@
 >
 > ![Huddy board](screenshot.png)
 >
+> Every view (login, board light/dark/phone, filters, expanded and hidden
+> lists, settings, OAuth consent and error, the login e-mail in Mailpit) is in
+> [`screenshots/`](screenshots/), captured from a live run with the real Jev
+> model.
+>
 > The original static mockup is kept in [`mockup.html`](mockup.html) /
 > [`mockup.png`](mockup.png).
 
@@ -69,8 +74,8 @@ agent's own session, not through Huddy.
                        │  store actor ── state in memory, ranking, pubsub                   │       │
                        │    └ writer ─── one process per flush, atomic snapshot ──▶ huddy.json      │
                        │  reviews ────── one process per review (gleam_httpc) ──▶ api.typesafe.ai ─┘ │
-                       │  janitor     ── review sweeps, decision e-mails, expiry, backups           │
-                       │  mailer      ── login codes + decision notifications via SMTP (gen_smtp)  │
+                       │  janitor     ── review sweeps, retention, backups                         │
+                       │  mailer      ── login codes via SMTP (gen_smtp); the only e-mail Huddy sends│
                        └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,11 +102,11 @@ agent's own session, not through Huddy.
 huddy_sup (one_for_one)
 ├── store        (named; owns state + ephemeral data, ranks on request, pubsub;
 │                 spawns a writer process per flush so it never blocks on disk)
-├── janitor      (timers: review sweep, decision e-mails, retention pruning, daily backup)
+├── janitor      (timers: review sweep, retention pruning, daily backup)
 └── mist         (HTTP listener; one process per request / SSE connection)
 ```
 
-Reviews and e-mails run in short-lived processes. Writes go `mcp/web → store`:
+Reviews and login-code e-mails run in short-lived processes. Writes go `mcp/web → store`:
 apply the change, flush it with the next batch (group commit), reply once it is
 on disk, then publish to SSE subscribers. Reads (`store.read`, `store.view`)
 come from memory; the file write happens in a separate writer process, so reads
@@ -161,8 +166,8 @@ Literal values work too.
 
   "decision_model": {
     "provider": "typesafe",
-    "base_url": "https://api.typesafe.ai",
-    "model": "jev-latest",
+    "endpoint": "https://api.typesafe.ai/v1/systemone",  // or "https://openrouter.ai/api/alpha/decisions"
+    "model": "jev-latest",                               // OpenRouter: "typesafe/jev-1.13"
     "api_key": { "$env": "TYPESAFE_API_KEY" },
     "enabled": true,                             // false = no Jev calls; deterministic checks only
     "timeout_ms": 4000
@@ -171,12 +176,12 @@ Literal values work too.
   "review": {
     "wait_ms": 2500,                             // how long a write waits to include findings in its response
     "thresholds": {
-      "wrong_kind": 0.80,                        // classified as another kind with ≥ this confidence
+      "wrong_kind": 0.70,                        // classified as another kind with ≥ this probability
       "unclear": 0.40,                           // P(readable) below this
       "not_a_question": 0.40,                    // decisions: P(answerable) below this
       "duplicate": 0.75,                         // same agent
       "overlap": 0.70,                           // another agent
-      "stale": 0.70,
+      "stale": 0.60,
       "injection": 0.70
     },
     "sweep_interval_minutes": 15,
@@ -188,9 +193,7 @@ Literal values work too.
   },
 
   "notify": {
-    "browser": true,                             // users can opt in to browser notifications
-    "email_blocking_after_minutes": 10,          // email the owner if a blocking decision is still unseen
-    "email_non_blocking": false
+    "browser": true                              // users can opt in to browser notifications
   },
 
   "display": {
@@ -278,10 +281,13 @@ everyone else.
 |---|---|---|
 | **The page** | always | Decisions from your own agents get a "yours" mark and sort first within their group. The tab title shows the count, e.g. `(2) Huddy`. |
 | **Browser notification** | blocking: always; non-blocking: if the user opts in | Users opt in on the page, which requests Notification permission. Delivered over the user's open SSE connections (§9.3). It uses `tag: "huddy-d<id>"`, so several open tabs show one notification. |
-| **Email** | a blocking decision is still open and the owner hasn't marked it seen after `email_blocking_after_minutes` | Sent once per decision. Users can turn it off in settings. `email_non_blocking` extends it to non-blocking decisions. |
+
+Huddy sends no e-mail about decisions; the login code is the only e-mail it
+ever sends.
 
 **"Seen"** is a button on each decision card. It records `seen_by`/`seen_at`,
-shows "seen by alice · 5m" on the card, and stops any pending email. The agent
+shows "seen by alice · 5m" on the card, and lowers a non-blocking decision's
+priority. The agent
 closes the decision with `resolved` once its human has answered it. Huddy itself
 carries no answer.
 
@@ -432,7 +438,7 @@ mutation:
 
   "users": [
     { "id": 3, "email": "alice@acme.dev", "handle": "alice",
-      "notify_email": true, "notify_browser_non_blocking": false,
+      "notify_browser_non_blocking": false,
       "created_at": 1789000000000, "last_login_at": 1791600000000 }
   ],
   "web_sessions": [
@@ -448,7 +454,7 @@ mutation:
       "detail": "", "blocking": false, "options": null, "state": "active",
       "importance": 2.6, "reviewed_at": 1791620000000,
       "stale_p": null, "overlaps": null, "flagged": false,
-      "seen_by": null, "seen_at": null, "owner_emailed_at": null,
+      "seen_by": null, "seen_at": null,
       "hidden_by": null, "hidden_note": null,
       "version": 3, "created_at": 1791610000000, "updated_at": 1791620000000, "closed_at": null }
   ],
@@ -834,8 +840,8 @@ Interactions are plain `<form method=post>`. A ~40-line script upgrades them to
   hidden list,
 - **enable browser notifications** (a one-time button that requests permission),
 - `/settings`: create and revoke **MCP secret URLs**, see and revoke **OAuth
-  grants** (connected clients), change your handle, and toggle decision emails
-  and non-blocking browser notifications.
+  grants** (connected clients), change your handle, and toggle browser
+  notifications for non-blocking decisions.
 
 ### 9.3 Live updates over SSE
 
@@ -1011,8 +1017,8 @@ src/
   huddy/review.gleam          pure: build Jev questions, interpret answers → findings; deterministic checks
   huddy/reviewer.gleam        run reviews (with a deadline), sweeps
   huddy/jev.gleam             HTTP client for /v1/systemone (behind the `Ask` function type)
-  huddy/janitor.gleam         timers: sweeps, decision e-mails, retention, backups
-  huddy/mailer.gleam          SMTP / log transport
+  huddy/janitor.gleam         timers: sweeps, retention, backups
+  huddy/mailer.gleam          SMTP / log transport (login codes only)
   huddy/web/router.gleam      top-level handler (mist for /events and /mcp, wisp for the rest)
   huddy/web/page.gleam        board zones      web/sse.gleam     live zone swaps + notify
   huddy/web/login.gleam       email codes      web/settings.gleam  links, grants, prefs
@@ -1054,7 +1060,7 @@ clients).
 | M1 | Board: items via MCP (**secret URL only**), deterministic ranking, sketch rendering, live SSE swaps, "seen" and "hide" | An agent posts a goal, tasks and decisions, and the page updates live |
 | M2 | Review: write-time review, sweeps, findings in responses and piggybacked, inbox, dismissals | Findings flow end to end; thresholds tuned from a week of dismissal data |
 | M3 | OAuth AS: PRM, AS metadata, CIMD + DCR, consent, rotation, revoke UI | Claude Code and Codex connect over OAuth without a secret URL |
-| M4 | Decision notifications (browser + email), filters and expand, dark mode, backups, retention | Team dogfoods it |
+| M4 | Decision notifications (page + browser), filters and expand, dark mode, backups, retention | Team dogfoods it |
 
 Secret URLs ship before OAuth so that agents can start using Huddy in M1.
 
@@ -1064,14 +1070,14 @@ Secret URLs ship before OAuth so that agents can start using Huddy in M1.
 
 | Topic | Decision |
 |---|---|
-| Human ↔ agent | Huddy only **notifies** the agent's owner about decisions (page, browser, email). Humans answer their agents directly; there are no replies through Huddy. |
+| Human ↔ agent | Huddy only **notifies** the agent's owner about decisions (page + browser notifications; no e-mail). Humans answer their agents directly; there are no replies through Huddy. |
 | Review | Gating and hygiene are **one review** that only produces findings. The agent decides what to do and can dismiss with a reason. Huddy never rejects, edits or closes on content grounds. |
 | Refusals | Only malformed input (as tool errors), auth, and rate limits. |
 | Concurrent sessions | Same `owner/name/project` share one slot; pass a different `agent` name to separate them. |
 | Stale items | Fade and notify; never auto-close. |
 | Layout | Category zones; per-agent view via filters. |
 | Icons | Circle (goal), triangle (task), diamond (decision; filled when blocking). |
-| Email | SMTP via `gen_smtp`; `log` transport for development. |
+| Email | Login codes only, via SMTP (`gen_smtp`); `log` transport for development. |
 | Secrets | `{"$env": "NAME"}` allowed for any string in the config; literals also work. |
 | Handles | Derived from the email local part (numeric suffix on collision), changeable in settings. |
 | Storage | One JSON file: state in memory, single writer, group commit, tmp + fsync + rename; ephemeral data in memory only. |
@@ -1099,8 +1105,32 @@ Where the implementation refined the design above:
   times, delivery marks) from the last few seconds may be lost.
 - **CIMD size cap:** `gleam_httpc` can't stop reading partway through a body,
   so the 10 KB limit is checked after download, together with the 5 s timeout.
-- **Verified locally:** unit and end-to-end tests (63), the live board in
+- **Verified locally:** unit and end-to-end tests (63), the Docker Compose stack (image build, sign-in via Mailpit, live Jev review from the container, restart persistence), the live board in
   Chromium at desktop and phone widths and in dark mode, the full OAuth flow,
-  and the review loop against a fake `/v1/systemone`. Two things were not tested
-  here: the real TypeSafe API, which needs a key, and real Claude Code / Codex
-  clients.
+  the review loop against a fake `/v1/systemone`, and against the live model
+  through OpenRouter. Real Claude Code / Codex clients were not tested here.
+- **Decision-model endpoint.** `decision_model.endpoint` takes the full URL.
+  Jev is also served by OpenRouter (`https://openrouter.ai/api/alpha/decisions`,
+  model `typesafe/jev-1.13`) with the same request/response schema; responses
+  add `usage.cost` and an `id`.
+- **Outbound proxy.** Erlang's `httpc` ignores `HTTPS_PROXY`, so Huddy reads
+  `HTTPS_PROXY`/`NO_PROXY` at startup and configures `httpc` itself. This
+  matters for corporate networks and was needed to run it here.
+- **E-mail is login codes only.** Decision notifications are on the page and in
+  the browser. There are no decision e-mails and no per-user e-mail preference.
+- **Question calibration against the live model** (typesafe/jev-1.13, run
+  during development):
+
+  | Question | Change | Result |
+  |---|---|---|
+  | `injection` | Named yes/no criteria, and spelled out "gives orders to readers" vs "describes own work, even when imperative" | Benign items went from 0.46–0.90 (false positives) to ≤0.62; real injections score 0.77–0.98. Threshold 0.7. |
+  | `readable` | yes/no criteria | Clear titles went from ≥0.34 to ≥0.49; vague ones ("fix", "wip asdf", "CI") ≤0.24. Threshold 0.4. |
+  | `answerable` | yes/no criteria | Real questions 0.97–0.98; status lines 0.04–0.17. |
+  | `stale_iNN` | A yes/no question naming both items, instead of a four-way choice | In a realistic state with near-duplicate items, a clearly finished item went from 0.52 to 0.73–0.75; unrelated items stay ≤0.12. Threshold 0.6. |
+  | `kind_fit` | Thresholds use the chosen option's *probability*. The API's separate `confidence` field is a different, lower-scaled number. | A question posted as a task scores 0.76–0.79 for "decision"; correct kinds score 1.0. Threshold 0.7. |
+
+  `kind_fit`, `same_as` (duplicates and overlaps at 1.0), and `importance`
+  worked as first written. A review call takes about 300 ms.
+- **Docker.** `docker-compose.yml` brings up Huddy and Mailpit. The Dockerfile
+  can take the `gleam` binary from a build context (`GLEAM_SOURCE=context`) and
+  a proxy CA as a build secret (`extra_ca`), for offline or proxied builds.

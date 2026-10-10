@@ -115,7 +115,6 @@ fn encode_user(u: User) -> Json {
     #("id", json.int(u.id)),
     #("email", json.string(u.email)),
     #("handle", json.string(u.handle)),
-    #("notify_email", json.bool(u.notify_email)),
     #("notify_browser_non_blocking", json.bool(u.notify_browser_non_blocking)),
     #("created_at", json.int(u.created_at)),
     #("last_login_at", opt(u.last_login_at, json.int)),
@@ -160,7 +159,6 @@ pub fn encode_item(i: Item) -> Json {
     #("flagged", json.bool(i.flagged)),
     #("seen_by", opt(i.seen_by, json.int)),
     #("seen_at", opt(i.seen_at, json.int)),
-    #("owner_emailed_at", opt(i.owner_emailed_at, json.int)),
     #("hidden_by", opt(i.hidden_by, json.int)),
     #("hidden_note", opt(i.hidden_note, json.string)),
     #("version", json.int(i.version)),
@@ -369,7 +367,6 @@ fn user_decoder() -> Decoder(User) {
   use id <- decode.field("id", decode.int)
   use email <- decode.field("email", decode.string)
   use handle <- decode.field("handle", decode.string)
-  use notify_email <- decode.optional_field("notify_email", True, decode.bool)
   use nb <- decode.optional_field(
     "notify_browser_non_blocking",
     False,
@@ -381,7 +378,6 @@ fn user_decoder() -> Decoder(User) {
     id:,
     email:,
     handle:,
-    notify_email:,
     notify_browser_non_blocking: nb,
     created_at:,
     last_login_at:,
@@ -439,7 +435,6 @@ pub fn item_decoder() -> Decoder(Item) {
   use flagged <- decode.optional_field("flagged", False, decode.bool)
   use seen_by <- nullable("seen_by", decode.int)
   use seen_at <- nullable("seen_at", decode.int)
-  use owner_emailed_at <- nullable("owner_emailed_at", decode.int)
   use hidden_by <- nullable("hidden_by", decode.int)
   use hidden_note <- nullable("hidden_note", decode.string)
   use version <- decode.optional_field("version", 1, decode.int)
@@ -462,7 +457,6 @@ pub fn item_decoder() -> Decoder(Item) {
     flagged:,
     seen_by:,
     seen_at:,
-    owner_emailed_at:,
     hidden_by:,
     hidden_note:,
     version:,

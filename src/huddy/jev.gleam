@@ -13,8 +13,9 @@ import gleam/result
 import huddy/config
 
 pub type Question {
-  /// Yes/no: answered with P(yes).
-  Noul(instructions: String)
+  /// Yes/no: answered with P(yes). `yes`/`no` describe what counts as each
+  /// (empty strings omit the criteria); naming both sides calibrates better.
+  Noul(instructions: String, yes: String, no: String)
   /// Pick one of the named choices (name -> description).
   Choice(instructions: String, criteria: List(#(String, String)))
   /// Rate on an ordered rubric (level 0, 1, 2, …).
@@ -51,11 +52,27 @@ pub type Ask =
 
 pub fn question_json(q: Question) -> Json {
   case q {
-    Noul(instructions) ->
-      json.object([
-        #("type", json.string("noul")),
-        #("instructions", json.string(instructions)),
-      ])
+    Noul(instructions, yes, no) ->
+      json.object(
+        list.flatten([
+          [
+            #("type", json.string("noul")),
+            #("instructions", json.string(instructions)),
+          ],
+          case yes, no {
+            "", "" -> []
+            _, _ -> [
+              #(
+                "criteria",
+                json.object([
+                  #("true", json.string(yes)),
+                  #("false", json.string(no)),
+                ]),
+              ),
+            ]
+          },
+        ]),
+      )
     Choice(instructions, criteria) ->
       json.object([
         #("type", json.string("choice")),
@@ -151,8 +168,8 @@ pub fn client(cfg: config.DecisionModel) -> Ask {
   fn(state: Json, questions: List(#(String, Question))) {
     let body = request_json(cfg.model, state, questions) |> json.to_string
     use req <- result.try(
-      request.to(cfg.base_url <> "/v1/systemone")
-      |> result.replace_error("invalid decision_model.base_url"),
+      request.to(cfg.endpoint)
+      |> result.replace_error("invalid decision_model.endpoint"),
     )
     let req =
       req

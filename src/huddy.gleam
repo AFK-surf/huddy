@@ -79,6 +79,10 @@ pub fn default_overrides() -> Overrides {
 /// store, the janitor and the HTTP server.
 pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
   sys.limiter_init()
+  case sys.configure_proxy() {
+    Ok(proxy) -> logging.log(logging.Info, "outbound HTTPS via proxy " <> proxy)
+    Error(_) -> Nil
+  }
   let storage = cfg.storage
   use _ <- result.try(sys.ensure_dir(parent(storage.path)))
   use _ <- result.try(persist.acquire_lock(storage.path))

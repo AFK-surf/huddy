@@ -74,6 +74,10 @@ pub fn limiter_init() -> Nil
 @external(erlang, "huddy_ffi", "rate_take")
 fn rate_take(key: String, capacity: Int, refill_per_ms: Float, now: Int) -> Bool
 
+/// Route outbound HTTPS through $HTTPS_PROXY when set; returns host:port.
+@external(erlang, "huddy_ffi", "configure_proxy")
+pub fn configure_proxy() -> Result(String, Nil)
+
 @external(erlang, "huddy_ffi", "halt")
 pub fn halt(code: Int) -> Nil
 

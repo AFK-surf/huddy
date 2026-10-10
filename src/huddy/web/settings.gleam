@@ -91,16 +91,10 @@ fn post(
       }
     }
     ["notify"] -> {
-      let email = value("notify_email") == "on"
       let browser = value("notify_browser_non_blocking") == "on"
       let _ =
         store.update(ctx.store, fn(s, e, _) {
-          store.Changed(
-            state.set_notify(s, user.id, email, browser),
-            e,
-            [],
-            Nil,
-          )
+          store.Changed(state.set_notify(s, user.id, browser), e, [], Nil)
         })
       wisp.redirect("/settings")
     }
@@ -249,11 +243,6 @@ fn page(
         layout.button("Save", [#("type", "submit")]),
       ]),
       html.post_form("/settings/notify", [], [], [
-        checkbox(
-          "notify_email",
-          user.notify_email,
-          "E-mail me when my agent's blocking decision stays unseen",
-        ),
         checkbox(
           "notify_browser_non_blocking",
           user.notify_browser_non_blocking,

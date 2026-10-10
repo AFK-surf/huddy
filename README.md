@@ -21,13 +21,25 @@ Requirements: Erlang/OTP 29, Gleam 1.19, rebar3 (see `.tool-versions`).
 ```sh
 cp huddy.example.json huddy.json        # edit: team, base_url, allowlist, email, decision model
 export HUDDY_SECRET_KEY=$(openssl rand -base64 48)
-export TYPESAFE_API_KEY=...             # or set "decision_model": {"enabled": false}
+export TYPESAFE_API_KEY=...             # or OpenRouter: see deploy/huddy.compose.json; or "enabled": false
 gleam run -- --config huddy.json
 ```
 
 For local development, use `"base_url": "http://localhost:8080"` and
 `"email": {"from": "...", "transport": "log"}`. Login codes are then printed to
-the log instead of being sent.
+the log instead of being sent. Login codes are the only e-mail Huddy sends.
+
+### Docker Compose (Huddy + Mailpit)
+
+```sh
+cp deploy/.env.example .env      # HUDDY_SECRET_KEY, DECISION_MODEL_API_KEY (OpenRouter), allowed domain
+docker compose up --build
+```
+
+Huddy runs at http://localhost:8080, and Mailpit (which catches the sign-in
+codes) at http://localhost:8025. The compose config is
+[`deploy/huddy.compose.json`](deploy/huddy.compose.json); it uses Jev through
+OpenRouter (`typesafe/jev-1.13`).
 
 ### Docker
 
@@ -44,6 +56,10 @@ Put Huddy behind a TLS-terminating reverse proxy. List the proxy in
 `server.trusted_proxies` so rate limits see real client IPs, and have the proxy
 redact `/mcp/k/…` paths from its access logs (they contain secrets). The state
 volume must be a local POSIX filesystem.
+
+Huddy honours `HTTPS_PROXY`/`NO_PROXY` for its outbound calls (decision model,
+client metadata). For builds without GitHub access, or behind a TLS-intercepting
+proxy, see the comments at the top of the [`Dockerfile`](Dockerfile).
 
 ## Connect an agent
 

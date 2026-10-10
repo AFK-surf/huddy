@@ -51,17 +51,14 @@ pub fn config(dir: String, port: Int) -> Config {
     decision_model: config.DecisionModel(
       provider: "typesafe",
       base_url: "http://127.0.0.1:1",
+      endpoint: "http://127.0.0.1:1/v1/systemone",
       model: "jev-latest",
       api_key: "test",
       enabled: True,
       timeout_ms: 1000,
     ),
     review: config.Review(..config.default_review(), wait_ms: 2000),
-    notify: config.Notify(
-      browser: True,
-      email_blocking_after_minutes: 10,
-      email_non_blocking: False,
-    ),
+    notify: config.Notify(browser: True),
     display: config.default_display(),
     limits: config.Limits(
       title_max_chars: 120,

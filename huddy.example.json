@@ -51,7 +51,7 @@
 
   "decision_model": {
     "provider": "typesafe",
-    "base_url": "https://api.typesafe.ai",
+    "endpoint": "https://api.typesafe.ai/v1/systemone",
     "model": "jev-latest",
     "api_key": { "$env": "TYPESAFE_API_KEY" },
     "enabled": true,
@@ -61,12 +61,12 @@
   "review": {
     "wait_ms": 2500,
     "thresholds": {
-      "wrong_kind": 0.8,
+      "wrong_kind": 0.7,
       "unclear": 0.4,
       "not_a_question": 0.4,
       "duplicate": 0.75,
       "overlap": 0.7,
-      "stale": 0.7,
+      "stale": 0.6,
       "injection": 0.7
     },
     "sweep_interval_minutes": 15,
@@ -78,9 +78,7 @@
   },
 
   "notify": {
-    "browser": true,
-    "email_blocking_after_minutes": 10,
-    "email_non_blocking": false
+    "browser": true
   },
 
   "display": {

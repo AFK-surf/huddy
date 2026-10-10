@@ -26,7 +26,7 @@ pub fn minimal_config_gets_defaults_test() {
   assert c.auth.allowed_domains == ["acme.dev"]
   assert c.email.transport == config.LogTransport
   assert c.display.slots_tasks == 12
-  assert c.review.thresholds.stale == 0.7
+  assert c.review.thresholds.stale == 0.6
   assert config.mcp_resource(c) == "https://huddy.acme.dev/mcp"
 }
 
@@ -132,4 +132,32 @@ pub fn invalid_trusted_proxy_is_an_error_test() {
     )
   let assert Error(message) = parse(text)
   assert string.contains(message, "trusted_proxies")
+}
+
+pub fn decision_model_endpoint_test() {
+  let assert Ok(c) = parse(minimal)
+  assert c.decision_model.endpoint == "https://api.typesafe.ai/v1/systemone"
+  let openrouter =
+    string.replace(
+      minimal,
+      "{ \"enabled\": false }",
+      "{ \"enabled\": false, \"endpoint\": \"https://openrouter.ai/api/alpha/decisions\", \"model\": \"typesafe/jev-1.13\" }",
+    )
+  let assert Ok(c) = parse(openrouter)
+  assert c.decision_model.endpoint
+    == "https://openrouter.ai/api/alpha/decisions"
+  assert c.decision_model.model == "typesafe/jev-1.13"
+}
+
+pub fn compose_config_parses_test() {
+  support.putenv(
+    "HUDDY_SECRET_KEY",
+    "compose-secret-0123456789abcdefghijklmnop",
+  )
+  support.putenv("DECISION_MODEL_API_KEY", "key")
+  support.putenv("HUDDY_ALLOWED_DOMAIN", "example.com")
+  support.putenv("SMTP_HOST", "mailpit")
+  let assert Ok(c) = config.load("deploy/huddy.compose.json")
+  assert c.auth.allowed_domains == ["example.com"]
+  assert c.email.transport == config.Smtp("mailpit", 1025, "none", "", "")
 }

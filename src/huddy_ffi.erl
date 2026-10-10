@@ -3,7 +3,8 @@
 -export([now_ms/0, os_pid/0, getenv/1, atomic_write/2, read_file/1, delete_file/1,
          file_exists/1, ensure_dir/1, list_dir/1, acquire_lock/1, release_lock/1,
          utc_date_compact/1, rfc2822_date/1, getaddrs/1, send_email/5,
-         limiter_init/0, rate_take/4, file_size/1, halt/1, rescue/1]).
+         limiter_init/0, rate_take/4, file_size/1, halt/1, rescue/1,
+         configure_proxy/0]).
 
 now_ms() -> erlang:system_time(millisecond).
 
@@ -206,6 +207,44 @@ rate_take(Key, Capacity, RefillPerMs, Now) ->
     end.
 
 halt(Code) -> erlang:halt(Code).
+
+%% Erlang's httpc ignores HTTPS_PROXY; honour it (and NO_PROXY) for the
+%% default httpc profile used by gleam_httpc. Returns the proxy used, if any.
+configure_proxy() ->
+    {ok, _} = application:ensure_all_started(inets),
+    {ok, _} = application:ensure_all_started(ssl),
+    Proxy = first_env(["HTTPS_PROXY", "https_proxy"]),
+    case Proxy =/= false andalso uri_string:parse(Proxy) of
+        #{host := Host, port := Port} ->
+            NoProxy = no_proxy_list(first_env(["NO_PROXY", "no_proxy"])),
+            ok = httpc:set_options([{https_proxy, {{Host, Port}, NoProxy}},
+                                    {proxy, {{Host, Port}, NoProxy}}]),
+            {ok, unicode:characters_to_binary(Host ++ ":" ++ integer_to_list(Port))};
+        _ -> {error, nil}
+    end.
+
+first_env([]) -> false;
+first_env([Name | Rest]) ->
+    case os:getenv(Name) of
+        false -> first_env(Rest);
+        "" -> first_env(Rest);
+        Value -> Value
+    end.
+
+%% httpc understands host names, "*.domain" wildcards and IP addresses, but
+%% not CIDR ranges; translate ".domain" and drop the rest.
+no_proxy_list(false) -> ["localhost", "127.0.0.1"];
+no_proxy_list(Value) ->
+    Entries = [string:trim(E) || E <- string:split(Value, ",", all)],
+    Hosts = lists:filtermap(
+              fun("") -> false;
+                 ([$. | Domain]) -> {true, "*." ++ Domain};
+                 (E) -> case lists:member($/, E) of
+                            true -> false;
+                            false -> {true, E}
+                        end
+              end, Entries),
+    lists:usort(["localhost", "127.0.0.1" | Hosts]).
 
 %% Run F, turning any exception into {error, Description}.
 rescue(F) ->

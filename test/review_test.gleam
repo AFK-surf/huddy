@@ -59,18 +59,7 @@ pub fn interpretation_produces_findings_test() {
       #("importance", jev.ScoreAnswer(2.5, 0.8, dict.new())),
       #("injection", jev.NoulAnswer(0.9)),
       #("same_as", choice(model.item_ref(theirs.id), 0.8)),
-      #(
-        "stale_" <> model.item_ref(own.id),
-        jev.ChoiceAnswer(
-          "finished",
-          0.6,
-          dict.from_list([
-            #("finished", 0.6),
-            #("superseded", 0.2),
-            #("current", 0.2),
-          ]),
-        ),
-      ),
+      #("stale_" <> model.item_ref(own.id), jev.NoulAnswer(0.8)),
     ])
   let #(importance, findings) =
     review.interpret_write(req.context, answers, config.default_thresholds(), 7)

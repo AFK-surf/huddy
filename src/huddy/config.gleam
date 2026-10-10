@@ -78,6 +78,10 @@ pub type DecisionModel {
   DecisionModel(
     provider: String,
     base_url: String,
+    /// Full URL of the decisions endpoint. Defaults to `base_url` +
+    /// "/v1/systemone" (TypeSafe); OpenRouter uses
+    /// "https://openrouter.ai/api/alpha/decisions".
+    endpoint: String,
     model: String,
     api_key: String,
     enabled: Bool,
@@ -111,11 +115,7 @@ pub type Review {
 }
 
 pub type Notify {
-  Notify(
-    browser: Bool,
-    email_blocking_after_minutes: Int,
-    email_non_blocking: Bool,
-  )
+  Notify(browser: Bool)
 }
 
 pub type Display {
@@ -254,7 +254,7 @@ pub fn decoder() -> Decoder(Config) {
     default_decision_model(),
   )
   use review <- section("review", review_decoder(), default_review())
-  use notify <- section("notify", notify_decoder(), Notify(True, 10, False))
+  use notify <- section("notify", notify_decoder(), Notify(browser: True))
   use display <- section("display", display_decoder(), default_display())
   use limits <- section("limits", limits_decoder(), Limits(120, 2000, 12))
   use retention <- section(
@@ -396,6 +396,7 @@ fn default_decision_model() -> DecisionModel {
   DecisionModel(
     provider: "typesafe",
     base_url: "https://api.typesafe.ai",
+    endpoint: "https://api.typesafe.ai/v1/systemone",
     model: "jev-latest",
     api_key: "",
     enabled: False,
@@ -406,6 +407,7 @@ fn default_decision_model() -> DecisionModel {
 fn decision_model_decoder() -> Decoder(DecisionModel) {
   use provider <- opt("provider", "typesafe", str())
   use base_url <- opt("base_url", "https://api.typesafe.ai", str())
+  use endpoint <- opt("endpoint", "", str())
   use model <- opt("model", "jev-latest", str())
   use api_key <- opt("api_key", "", str())
   use enabled <- opt("enabled", True, decode.bool)
@@ -413,6 +415,10 @@ fn decision_model_decoder() -> Decoder(DecisionModel) {
   decode.success(DecisionModel(
     provider:,
     base_url: strip_trailing_slash(base_url),
+    endpoint: case endpoint {
+      "" -> strip_trailing_slash(base_url) <> "/v1/systemone"
+      e -> e
+    },
     model:,
     api_key:,
     enabled:,
@@ -422,12 +428,12 @@ fn decision_model_decoder() -> Decoder(DecisionModel) {
 
 pub fn default_thresholds() -> Thresholds {
   Thresholds(
-    wrong_kind: 0.8,
+    wrong_kind: 0.7,
     unclear: 0.4,
     not_a_question: 0.4,
     duplicate: 0.75,
     overlap: 0.7,
-    stale: 0.7,
+    stale: 0.6,
     injection: 0.7,
   )
 }
@@ -507,13 +513,7 @@ fn review_decoder() -> Decoder(Review) {
 
 fn notify_decoder() -> Decoder(Notify) {
   use browser <- opt("browser", True, decode.bool)
-  use after <- opt("email_blocking_after_minutes", 10, decode.int)
-  use non_blocking <- opt("email_non_blocking", False, decode.bool)
-  decode.success(Notify(
-    browser:,
-    email_blocking_after_minutes: after,
-    email_non_blocking: non_blocking,
-  ))
+  decode.success(Notify(browser:))
 }
 
 pub fn default_display() -> Display {

@@ -1,0 +1,6 @@
+build
+.git
+docs
+test
+*.md
+.env

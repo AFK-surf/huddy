@@ -161,7 +161,6 @@ pub fn create_user(state: State, email: String, now: Int) -> #(State, User) {
       id:,
       email:,
       handle:,
-      notify_email: True,
       notify_browser_non_blocking: False,
       created_at: now,
       last_login_at: None,
@@ -200,15 +199,10 @@ pub fn set_handle(
 pub fn set_notify(
   state: State,
   user_id: Int,
-  email: Bool,
   browser_non_blocking: Bool,
 ) -> State {
   update_user(state, user_id, fn(u) {
-    User(
-      ..u,
-      notify_email: email,
-      notify_browser_non_blocking: browser_non_blocking,
-    )
+    User(..u, notify_browser_non_blocking: browser_non_blocking)
   })
 }
 
@@ -396,7 +390,6 @@ pub fn create_item(
       flagged: False,
       seen_by: None,
       seen_at: None,
-      owner_emailed_at: None,
       hidden_by: None,
       hidden_note: None,
       version: 1,
@@ -508,11 +501,6 @@ pub fn edit_item(
           options:,
           version: item.version + 1,
           updated_at: now,
-          // a blocking flag turning on restarts the e-mail clock
-          owner_emailed_at: case blocking && !item.blocking {
-            True -> None
-            False -> item.owner_emailed_at
-          },
         )
       put_item(state, updated)
       |> resolve_findings_for_item(id, now)
@@ -695,13 +683,6 @@ pub fn set_review_result(
         ),
       )
     _ -> state
-  }
-}
-
-pub fn mark_emailed(state: State, item_id: Int, now: Int) -> State {
-  case get_item(state, item_id) {
-    Some(i) -> put_item(state, Item(..i, owner_emailed_at: Some(now)))
-    None -> state
   }
 }
 
