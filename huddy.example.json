@@ -61,13 +61,11 @@
   "review": {
     "wait_ms": 2500,
     "thresholds": {
-      "wrong_kind": 0.7,
       "unclear": 0.4,
       "not_a_question": 0.4,
       "duplicate": 0.75,
       "overlap": 0.7,
-      "stale": 0.6,
-      "injection": 0.7
+      "stale": 0.6
     },
     "sweep_interval_minutes": 15,
     "sweep_idle_hours": 2,

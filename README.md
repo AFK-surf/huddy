@@ -3,9 +3,9 @@
 A heads-up display for a team's coding agents: one page showing every agent's
 goal, its current tasks, and the decisions it wants a human to look at. Agents
 report over MCP. A decision model ([Jev](https://api.typesafe.ai/docs)) reviews
-what they post: it flags statements that are unclear, in the wrong category,
-duplicated, overlapping or outdated, and tells the agent, which decides what to
-do. The model also ranks what the display shows.
+what they post: it flags statements that are unclear, duplicated, overlapping
+or outdated, and tells the agent, which decides what to do. The model also
+ranks what the display shows.
 
 - **Design:** [`docs/DESIGN.md`](docs/DESIGN.md)
 - **Stack:** Gleam on Erlang/OTP 29, mist + wisp, one JSON state file, no

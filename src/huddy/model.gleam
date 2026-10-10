@@ -71,7 +71,6 @@ pub type Item {
     reviewed_at: Option(Int),
     stale_p: Option(Float),
     overlaps: Option(Int),
-    flagged: Bool,
     seen_by: Option(Int),
     seen_at: Option(Int),
     hidden_by: Option(Int),
@@ -84,13 +83,11 @@ pub type Item {
 }
 
 pub type FindingKind {
-  WrongKind
   Unclear
   NotAQuestion
   Duplicate
   Overlap
   Stale
-  Injection
   Untouched
   TooManyOpen
   Hidden
@@ -332,13 +329,11 @@ pub fn is_open(item: Item) -> Bool {
 
 pub fn finding_kind_to_string(kind: FindingKind) -> String {
   case kind {
-    WrongKind -> "wrong_kind"
     Unclear -> "unclear"
     NotAQuestion -> "not_a_question"
     Duplicate -> "duplicate"
     Overlap -> "overlap"
     Stale -> "stale"
-    Injection -> "injection"
     Untouched -> "untouched"
     TooManyOpen -> "too_many_open"
     Hidden -> "hidden"
@@ -348,13 +343,11 @@ pub fn finding_kind_to_string(kind: FindingKind) -> String {
 pub fn finding_kind_from_string(s: String) -> Result(FindingKind, Nil) {
   list.find(
     [
-      WrongKind,
       Unclear,
       NotAQuestion,
       Duplicate,
       Overlap,
       Stale,
-      Injection,
       Untouched,
       TooManyOpen,
       Hidden,

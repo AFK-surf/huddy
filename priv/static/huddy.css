@@ -118,7 +118,6 @@ details.hide input { font: 14px var(--text); padding: 3px 6px; border: 1px solid
 .task .side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .task .meta { white-space: nowrap; padding-top: 4px; }
 .sub { font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
-.sub.flagged { color: var(--red); }
 .task.stale { opacity: .45; }
 .overlap { color: var(--goal); font-family: var(--hand); font-size: 16px; }
 @media (max-width: 560px) {

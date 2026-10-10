@@ -387,7 +387,6 @@ pub fn create_item(
       reviewed_at: None,
       stale_p: None,
       overlaps: None,
-      flagged: False,
       seen_by: None,
       seen_at: None,
       hidden_by: None,
@@ -803,8 +802,7 @@ pub fn refresh_flags(state: State, item_id: Int) -> State {
         |> list.find(fn(f) { f.kind == model.Overlap })
         |> result.map(fn(f) { f.related_item })
         |> result.unwrap(None)
-      let flagged = list.any(live, fn(f) { f.kind == model.Injection })
-      put_item(state, Item(..i, stale_p:, overlaps:, flagged:))
+      put_item(state, Item(..i, stale_p:, overlaps:))
     }
   }
 }
