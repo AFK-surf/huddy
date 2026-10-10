@@ -25,7 +25,8 @@ pub fn parse_ip(text: String) -> Result(Ip, Nil) {
 fn parse_ipv4(text: String) -> Result(Ip, Nil) {
   let parts = string.split(text, ".")
   use octets <- result.try(list.try_map(parts, int.parse))
-  case list.length(octets) == 4 && list.all(octets, fn(o) { o >= 0 && o < 256 })
+  case
+    list.length(octets) == 4 && list.all(octets, fn(o) { o >= 0 && o < 256 })
   {
     True -> Ok(octets)
     False -> Error(Nil)
@@ -114,7 +115,9 @@ fn to_bits(ip: Ip) -> List(Bool) {
   }
   list.flat_map(ip, fn(part) {
     int.range(from: 0, to: size, with: [], run: list.prepend)
-    |> list.map(fn(bit) { int.bitwise_and(int.bitwise_shift_right(part, bit), 1) == 1 })
+    |> list.map(fn(bit) {
+      int.bitwise_and(int.bitwise_shift_right(part, bit), 1) == 1
+    })
   })
 }
 
@@ -141,8 +144,8 @@ const non_public = [
   "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
   "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16",
   "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4",
-  "240.0.0.0/4", "::/128", "::1/128", "64:ff9b::/96", "100::/64", "2001:db8::/32",
-  "fc00::/7", "fe80::/10", "ff00::/8",
+  "240.0.0.0/4", "::/128", "::1/128", "64:ff9b::/96", "100::/64",
+  "2001:db8::/32", "fc00::/7", "fe80::/10", "ff00::/8",
 ]
 
 /// True for globally routable unicast addresses; False for loopback, private,

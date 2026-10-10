@@ -21,7 +21,10 @@ const hour_ms = 3_600_000
 
 // --- ids & events ------------------------------------------------------------
 
-fn bump(state: State, field: fn(model.NextIds) -> #(Int, model.NextIds)) -> #(State, Int) {
+fn bump(
+  state: State,
+  field: fn(model.NextIds) -> #(Int, model.NextIds),
+) -> #(State, Int) {
   let #(id, next) = field(state.next_id)
   #(State(..state, next_id: next), id)
 }
@@ -235,7 +238,11 @@ pub fn delete_session(state: State, token_sha256: String) -> State {
   State(..state, web_sessions: dict.delete(state.web_sessions, token_sha256))
 }
 
-pub fn session_user(state: State, token_sha256: String, now: Int) -> Option(User) {
+pub fn session_user(
+  state: State,
+  token_sha256: String,
+  now: Int,
+) -> Option(User) {
   case dict.get(state.web_sessions, token_sha256) {
     Ok(s) if s.expires_at > now -> user(state, s.user)
     _ -> None
@@ -251,7 +258,9 @@ pub fn find_agent(
   project: String,
 ) -> Option(Agent) {
   dict.values(state.agents)
-  |> list.find(fn(a) { a.owner == owner && a.name == name && a.project == project })
+  |> list.find(fn(a) {
+    a.owner == owner && a.name == name && a.project == project
+  })
   |> option.from_result
 }
 
@@ -265,7 +274,10 @@ pub fn ensure_agent(
   case find_agent(state, owner, name, project) {
     Some(agent) -> {
       let agent = Agent(..agent, last_seen_at: now)
-      #(State(..state, agents: dict.insert(state.agents, agent.id, agent)), agent)
+      #(
+        State(..state, agents: dict.insert(state.agents, agent.id, agent)),
+        agent,
+      )
     }
     None -> {
       let #(state, id) =
@@ -274,7 +286,14 @@ pub fn ensure_agent(
         Agent(id:, owner:, name:, project:, created_at: now, last_seen_at: now)
       let state = State(..state, agents: dict.insert(state.agents, id, agent))
       #(
-        add_event(state, now, agent_actor(id), None, "agent_created", name <> "/" <> project),
+        add_event(
+          state,
+          now,
+          agent_actor(id),
+          None,
+          "agent_created",
+          name <> "/" <> project,
+        ),
         agent,
       )
     }
@@ -286,7 +305,11 @@ pub fn touch_agent(state: State, agent_id: Int, now: Int) -> State {
     Ok(a) ->
       State(
         ..state,
-        agents: dict.insert(state.agents, agent_id, Agent(..a, last_seen_at: now)),
+        agents: dict.insert(
+          state.agents,
+          agent_id,
+          Agent(..a, last_seen_at: now),
+        ),
       )
     Error(_) -> state
   }
@@ -384,7 +407,13 @@ pub fn create_item(
   let state =
     put_item(state, item)
     |> touch_agent(agent_id, now)
-    |> add_event(now, agent_actor(agent_id), Some(id), "item_posted", model.kind_to_string(new.kind) <> ": " <> new.title)
+    |> add_event(
+      now,
+      agent_actor(agent_id),
+      Some(id),
+      "item_posted",
+      model.kind_to_string(new.kind) <> ": " <> new.title,
+    )
   #(state, item)
 }
 
@@ -411,18 +440,28 @@ pub fn edit_item(
   now: Int,
 ) -> Result(#(State, EditOutcome), String) {
   use item <- result.try(
-    get_item(state, id) |> option.to_result("No item " <> model.item_ref(id) <> "."),
+    get_item(state, id)
+    |> option.to_result("No item " <> model.item_ref(id) <> "."),
   )
   use _ <- result.try(case item.agent == agent_id {
     True -> Ok(Nil)
     False ->
       Error(
-        model.item_ref(id) <> " belongs to " <> agent_label(state, item.agent) <> "; agents can only change their own items.",
+        model.item_ref(id)
+        <> " belongs to "
+        <> agent_label(state, item.agent)
+        <> "; agents can only change their own items.",
       )
   })
   use _ <- result.try(case model.is_open(item) {
     True -> Ok(Nil)
-    False -> Error(model.item_ref(id) <> " is already closed (" <> model.state_to_string(item.state) <> ").")
+    False ->
+      Error(
+        model.item_ref(id)
+        <> " is already closed ("
+        <> model.state_to_string(item.state)
+        <> ").",
+      )
   })
   use new_state <- result.try(case edit.state {
     None -> Ok(None)
@@ -516,21 +555,43 @@ fn close_item(
     })
   let state =
     list.fold(related, state, fn(s, f) {
-      let s = put_finding(s, Finding(..f, status: model.FindingResolved, closed_at: Some(now)))
+      let s =
+        put_finding(
+          s,
+          Finding(..f, status: model.FindingResolved, closed_at: Some(now)),
+        )
       case f.item {
         Some(other) -> refresh_flags(s, other)
         None -> s
       }
     })
-  add_event(state, now, actor, Some(item.id), "item_closed", model.state_to_string(to))
+  add_event(
+    state,
+    now,
+    actor,
+    Some(item.id),
+    "item_closed",
+    model.state_to_string(to),
+  )
 }
 
-pub fn mark_seen(state: State, item_id: Int, user_id: Int, now: Int) -> Result(State, String) {
+pub fn mark_seen(
+  state: State,
+  item_id: Int,
+  user_id: Int,
+  now: Int,
+) -> Result(State, String) {
   case get_item(state, item_id) {
     Some(i) if i.kind == model.Decision ->
       Ok(
         put_item(state, Item(..i, seen_by: Some(user_id), seen_at: Some(now)))
-        |> add_event(now, user_actor(user_id), Some(item_id), "decision_seen", ""),
+        |> add_event(
+          now,
+          user_actor(user_id),
+          Some(item_id),
+          "decision_seen",
+          "",
+        ),
       )
     Some(_) -> Error("Only decisions can be marked seen.")
     None -> Error("No such item.")
@@ -550,14 +611,10 @@ pub fn hide(
       let state =
         put_item(
           state,
-          Item(
-            ..i,
-            hidden_by: Some(user_id),
-            hidden_note: case note {
-              "" -> None
-              n -> Some(n)
-            },
-          ),
+          Item(..i, hidden_by: Some(user_id), hidden_note: case note {
+            "" -> None
+            n -> Some(n)
+          }),
         )
       let who = handle_of(state, user_id)
       let message =
@@ -585,18 +642,36 @@ pub fn hide(
           now,
           0,
         )
-      Ok(add_event(state, now, user_actor(user_id), Some(item_id), "item_hidden", note))
+      Ok(add_event(
+        state,
+        now,
+        user_actor(user_id),
+        Some(item_id),
+        "item_hidden",
+        note,
+      ))
     }
     None -> Error("No such item.")
   }
 }
 
-pub fn unhide(state: State, item_id: Int, user_id: Int, now: Int) -> Result(State, String) {
+pub fn unhide(
+  state: State,
+  item_id: Int,
+  user_id: Int,
+  now: Int,
+) -> Result(State, String) {
   case get_item(state, item_id) {
     Some(i) ->
       Ok(
         put_item(state, Item(..i, hidden_by: None, hidden_note: None))
-        |> add_event(now, user_actor(user_id), Some(item_id), "item_unhidden", ""),
+        |> add_event(
+          now,
+          user_actor(user_id),
+          Some(item_id),
+          "item_unhidden",
+          "",
+        ),
       )
     None -> Error("No such item.")
   }
@@ -672,7 +747,8 @@ pub fn add_finding(
         model.Dismissed ->
           case new.kind {
             model.Stale ->
-              now - option.unwrap(f.closed_at, f.created_at) < dismiss_cooldown_ms
+              now - option.unwrap(f.closed_at, f.created_at)
+              < dismiss_cooldown_ms
             _ -> f.item_version == new.item_version
           }
         model.FindingResolved -> False
@@ -717,7 +793,10 @@ fn resolve_findings_for_item(state: State, item_id: Int, now: Int) -> State {
     dict.values(state.findings)
     |> list.filter(fn(f) { model.finding_is_live(f) && f.item == Some(item_id) })
     |> list.fold(state, fn(s, f) {
-      put_finding(s, Finding(..f, status: model.FindingResolved, closed_at: Some(now)))
+      put_finding(
+        s,
+        Finding(..f, status: model.FindingResolved, closed_at: Some(now)),
+      )
     })
   refresh_flags(state, item_id)
 }
@@ -729,7 +808,9 @@ pub fn refresh_flags(state: State, item_id: Int) -> State {
     Some(i) -> {
       let live =
         dict.values(state.findings)
-        |> list.filter(fn(f) { model.finding_is_live(f) && f.item == Some(item_id) })
+        |> list.filter(fn(f) {
+          model.finding_is_live(f) && f.item == Some(item_id)
+        })
       let stale_p =
         live
         |> list.filter(fn(f) { f.kind == model.Stale })
@@ -754,14 +835,23 @@ pub fn live_findings_for_agent(state: State, agent_id: Int) -> List(Finding) {
 }
 
 /// Undelivered findings for an agent; marks them delivered.
-pub fn take_inbox(state: State, agent_id: Int, now: Int) -> #(State, List(Finding)) {
+pub fn take_inbox(
+  state: State,
+  agent_id: Int,
+  now: Int,
+) -> #(State, List(Finding)) {
   let fresh =
     dict.values(state.findings)
-    |> list.filter(fn(f) { f.agent == agent_id && f.status == model.FindingOpen })
+    |> list.filter(fn(f) {
+      f.agent == agent_id && f.status == model.FindingOpen
+    })
     |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
   let state =
     list.fold(fresh, state, fn(s, f) {
-      put_finding(s, Finding(..f, status: model.Delivered, delivered_at: Some(now)))
+      put_finding(
+        s,
+        Finding(..f, status: model.Delivered, delivered_at: Some(now)),
+      )
     })
   #(state, fresh)
 }
@@ -770,7 +860,10 @@ pub fn mark_delivered(state: State, ids: List(Int), now: Int) -> State {
   list.fold(ids, state, fn(s, id) {
     case dict.get(s.findings, id) {
       Ok(f) if f.status == model.FindingOpen ->
-        put_finding(s, Finding(..f, status: model.Delivered, delivered_at: Some(now)))
+        put_finding(
+          s,
+          Finding(..f, status: model.Delivered, delivered_at: Some(now)),
+        )
       _ -> s
     }
   })
@@ -806,7 +899,14 @@ pub fn dismiss_findings(
               Some(item_id) -> refresh_flags(s, item_id)
               None -> s
             }
-            Ok(add_event(s, now, agent_actor(agent_id), f.item, "finding_dismissed", model.finding_kind_to_string(f.kind) <> ": " <> reason))
+            Ok(add_event(
+              s,
+              now,
+              agent_actor(agent_id),
+              f.item,
+              "finding_dismissed",
+              model.finding_kind_to_string(f.kind) <> ": " <> reason,
+            ))
           }
         }
     }
@@ -882,7 +982,10 @@ pub fn create_link(
       revoked_at: None,
     )
   let state = State(..state, mcp_links: dict.insert(state.mcp_links, id, link))
-  #(add_event(state, now, user_actor(user_id), None, "link_created", label), link)
+  #(
+    add_event(state, now, user_actor(user_id), None, "link_created", label),
+    link,
+  )
 }
 
 pub fn link_by_secret(state: State, secret_sha256: String) -> Option(McpLink) {
@@ -898,18 +1001,31 @@ pub fn touch_link(state: State, link_id: Int, now: Int) -> State {
     Ok(l) ->
       State(
         ..state,
-        mcp_links: dict.insert(state.mcp_links, link_id, McpLink(..l, last_used_at: Some(now))),
+        mcp_links: dict.insert(
+          state.mcp_links,
+          link_id,
+          McpLink(..l, last_used_at: Some(now)),
+        ),
       )
     Error(_) -> state
   }
 }
 
-pub fn revoke_link(state: State, link_id: Int, user_id: Int, now: Int) -> State {
+pub fn revoke_link(
+  state: State,
+  link_id: Int,
+  user_id: Int,
+  now: Int,
+) -> State {
   case dict.get(state.mcp_links, link_id) {
     Ok(l) if l.user == user_id && l.revoked_at == None ->
       State(
         ..state,
-        mcp_links: dict.insert(state.mcp_links, link_id, McpLink(..l, revoked_at: Some(now))),
+        mcp_links: dict.insert(
+          state.mcp_links,
+          link_id,
+          McpLink(..l, revoked_at: Some(now)),
+        ),
       )
       |> add_event(now, user_actor(user_id), None, "link_revoked", l.label)
     _ -> state
@@ -946,12 +1062,17 @@ pub fn ensure_grant(
   let existing =
     dict.values(state.oauth_grants)
     |> list.find(fn(g) {
-      g.client_id == client_id && g.user == user_id && option.is_none(g.revoked_at)
+      g.client_id == client_id
+      && g.user == user_id
+      && option.is_none(g.revoked_at)
     })
   case existing {
     Ok(g) -> {
       let g = OAuthGrant(..g, scope: merge_scopes(g.scope, scope))
-      #(State(..state, oauth_grants: dict.insert(state.oauth_grants, g.id, g)), g)
+      #(
+        State(..state, oauth_grants: dict.insert(state.oauth_grants, g.id, g)),
+        g,
+      )
     }
     Error(_) -> {
       let #(state, id) =
@@ -966,8 +1087,19 @@ pub fn ensure_grant(
           last_used_at: None,
           revoked_at: None,
         )
-      let state = State(..state, oauth_grants: dict.insert(state.oauth_grants, id, g))
-      #(add_event(state, now, user_actor(user_id), None, "oauth_grant", client_id), g)
+      let state =
+        State(..state, oauth_grants: dict.insert(state.oauth_grants, id, g))
+      #(
+        add_event(
+          state,
+          now,
+          user_actor(user_id),
+          None,
+          "oauth_grant",
+          client_id,
+        ),
+        g,
+      )
     }
   }
 }
@@ -1023,7 +1155,9 @@ pub fn mark_token_used(state: State, token_sha256: String, now: Int) -> State {
 pub fn revoke_family(state: State, family: String) -> State {
   State(
     ..state,
-    oauth_tokens: dict.filter(state.oauth_tokens, fn(_, t) { t.family != family }),
+    oauth_tokens: dict.filter(state.oauth_tokens, fn(_, t) {
+      t.family != family
+    }),
   )
 }
 
@@ -1036,21 +1170,42 @@ pub fn touch_grant(state: State, grant_id: Int, now: Int) -> State {
     Ok(g) ->
       State(
         ..state,
-        oauth_grants: dict.insert(state.oauth_grants, grant_id, OAuthGrant(..g, last_used_at: Some(now))),
+        oauth_grants: dict.insert(
+          state.oauth_grants,
+          grant_id,
+          OAuthGrant(..g, last_used_at: Some(now)),
+        ),
       )
     Error(_) -> state
   }
 }
 
-pub fn revoke_grant(state: State, grant_id: Int, user_id: Int, now: Int) -> State {
+pub fn revoke_grant(
+  state: State,
+  grant_id: Int,
+  user_id: Int,
+  now: Int,
+) -> State {
   case dict.get(state.oauth_grants, grant_id) {
     Ok(g) if g.user == user_id ->
       State(
         ..state,
-        oauth_grants: dict.insert(state.oauth_grants, grant_id, OAuthGrant(..g, revoked_at: Some(now))),
-        oauth_tokens: dict.filter(state.oauth_tokens, fn(_, t) { t.grant != grant_id }),
+        oauth_grants: dict.insert(
+          state.oauth_grants,
+          grant_id,
+          OAuthGrant(..g, revoked_at: Some(now)),
+        ),
+        oauth_tokens: dict.filter(state.oauth_tokens, fn(_, t) {
+          t.grant != grant_id
+        }),
       )
-      |> add_event(now, user_actor(user_id), None, "oauth_grant_revoked", g.client_id)
+      |> add_event(
+        now,
+        user_actor(user_id),
+        None,
+        "oauth_grant_revoked",
+        g.client_id,
+      )
     _ -> state
   }
 }
@@ -1104,7 +1259,9 @@ pub fn prune(state: State, policy: RetentionPolicy, now: Int) -> State {
       !is_doomed(f.item) && !is_doomed(f.related_item)
     })
   let events =
-    list.filter(state.events, fn(e) { e.at >= now - policy.events_days * day_ms })
+    list.filter(state.events, fn(e) {
+      e.at >= now - policy.events_days * day_ms
+    })
   let detail_cutoff = now - policy.judgment_detail_days * day_ms
   let judgments =
     state.judgments
@@ -1116,7 +1273,8 @@ pub fn prune(state: State, policy: RetentionPolicy, now: Int) -> State {
       }
     })
   let week = 7 * day_ms
-  let sessions = dict.filter(state.web_sessions, fn(_, s) { s.expires_at > now })
+  let sessions =
+    dict.filter(state.web_sessions, fn(_, s) { s.expires_at > now })
   let tokens = dict.filter(state.oauth_tokens, fn(_, t) { t.expires_at > now })
   let old_revoked = fn(at: Option(Int)) {
     case at {
@@ -1124,9 +1282,11 @@ pub fn prune(state: State, policy: RetentionPolicy, now: Int) -> State {
       None -> False
     }
   }
-  let grants = dict.filter(state.oauth_grants, fn(_, g) { !old_revoked(g.revoked_at) })
+  let grants =
+    dict.filter(state.oauth_grants, fn(_, g) { !old_revoked(g.revoked_at) })
   let tokens = dict.filter(tokens, fn(_, t) { dict.has_key(grants, t.grant) })
-  let links = dict.filter(state.mcp_links, fn(_, l) { !old_revoked(l.revoked_at) })
+  let links =
+    dict.filter(state.mcp_links, fn(_, l) { !old_revoked(l.revoked_at) })
   State(
     ..state,
     items:,
@@ -1161,6 +1321,9 @@ pub fn resolve_agent_findings(
     f.agent == agent_id && f.kind == kind && model.finding_is_live(f)
   })
   |> list.fold(state, fn(s, f) {
-    put_finding(s, Finding(..f, status: model.FindingResolved, closed_at: Some(now)))
+    put_finding(
+      s,
+      Finding(..f, status: model.FindingResolved, closed_at: Some(now)),
+    )
   })
 }

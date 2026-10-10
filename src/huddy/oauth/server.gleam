@@ -57,29 +57,45 @@ pub fn authorization_server(ctx: Ctx) -> Response {
   let base = ctx.config.base_url
   let mcp = ctx.config.mcp
   json_response(
-    json.object(list.flatten([
-      [
-        #("issuer", json.string(base)),
-        #("authorization_endpoint", json.string(base <> "/oauth/authorize")),
-        #("token_endpoint", json.string(base <> "/oauth/token")),
-        #("revocation_endpoint", json.string(base <> "/oauth/revoke")),
-        #("scopes_supported", json.array(scopes, json.string)),
-        #("response_types_supported", json.array(["code"], json.string)),
-        #(
-          "grant_types_supported",
-          json.array(["authorization_code", "refresh_token"], json.string),
-        ),
-        #("token_endpoint_auth_methods_supported", json.array(["none"], json.string)),
-        #("revocation_endpoint_auth_methods_supported", json.array(["none"], json.string)),
-        #("code_challenge_methods_supported", json.array(["S256"], json.string)),
-        #("client_id_metadata_document_supported", json.bool(mcp.client_id_metadata_documents)),
-        #("authorization_response_iss_parameter_supported", json.bool(True)),
-      ],
-      case mcp.dynamic_client_registration {
-        True -> [#("registration_endpoint", json.string(base <> "/oauth/register"))]
-        False -> []
-      },
-    ])),
+    json.object(
+      list.flatten([
+        [
+          #("issuer", json.string(base)),
+          #("authorization_endpoint", json.string(base <> "/oauth/authorize")),
+          #("token_endpoint", json.string(base <> "/oauth/token")),
+          #("revocation_endpoint", json.string(base <> "/oauth/revoke")),
+          #("scopes_supported", json.array(scopes, json.string)),
+          #("response_types_supported", json.array(["code"], json.string)),
+          #(
+            "grant_types_supported",
+            json.array(["authorization_code", "refresh_token"], json.string),
+          ),
+          #(
+            "token_endpoint_auth_methods_supported",
+            json.array(["none"], json.string),
+          ),
+          #(
+            "revocation_endpoint_auth_methods_supported",
+            json.array(["none"], json.string),
+          ),
+          #(
+            "code_challenge_methods_supported",
+            json.array(["S256"], json.string),
+          ),
+          #(
+            "client_id_metadata_document_supported",
+            json.bool(mcp.client_id_metadata_documents),
+          ),
+          #("authorization_response_iss_parameter_supported", json.bool(True)),
+        ],
+        case mcp.dynamic_client_registration {
+          True -> [
+            #("registration_endpoint", json.string(base <> "/oauth/register")),
+          ]
+          False -> []
+        },
+      ]),
+    ),
     200,
   )
 }
@@ -134,7 +150,10 @@ fn valid_redirect_uri(u: String) -> Bool {
         Some("http"), Some(host), None -> is_loopback(host)
         // private-use URI schemes for native apps (RFC 8252 §7.1)
         Some(scheme), _, None ->
-          !list.contains(["http", "https", "javascript", "data", "file", "vbscript"], scheme)
+          !list.contains(
+            ["http", "https", "javascript", "data", "file", "vbscript"],
+            scheme,
+          )
         _, _, _ -> False
       }
     Error(_) -> False
@@ -155,10 +174,13 @@ pub fn normalize_scope(requested: String) -> Result(String, Nil) {
         _ ->
           // write implies read for Huddy's tools
           Ok(
-            state.merge_scopes(string.join(wanted, " "), case list.contains(wanted, "huddy:write") {
-              True -> "huddy:read"
-              False -> ""
-            }),
+            state.merge_scopes(
+              string.join(wanted, " "),
+              case list.contains(wanted, "huddy:write") {
+                True -> "huddy:read"
+                False -> ""
+              },
+            ),
           )
       }
     }
@@ -167,8 +189,10 @@ pub fn normalize_scope(requested: String) -> Result(String, Nil) {
 
 fn resource_ok(ctx: Ctx, resource: String) -> Bool {
   let canonical = config.mcp_resource(ctx.config)
-  resource == "" || resource == canonical || resource == ctx.config.base_url
-    || resource == canonical <> "/"
+  resource == ""
+  || resource == canonical
+  || resource == ctx.config.base_url
+  || resource == canonical <> "/"
 }
 
 /// Look up (or fetch, for CIMD) a client.
@@ -197,7 +221,11 @@ fn resolve_client(ctx: Ctx, client_id: String) -> Result(OAuthClient, String) {
   }
 }
 
-fn refetch(ctx: Ctx, client_id: String, now: Int) -> Result(OAuthClient, String) {
+fn refetch(
+  ctx: Ctx,
+  client_id: String,
+  now: Int,
+) -> Result(OAuthClient, String) {
   use client <- result.try(ctx.fetch_client(client_id, now))
   let _ =
     store.update(ctx.store, fn(s, e, _) {
@@ -216,7 +244,10 @@ fn error_page(ctx: Ctx, message: String) -> Response {
   )
 }
 
-fn redirect_with(redirect_uri: String, params: List(#(String, String))) -> Response {
+fn redirect_with(
+  redirect_uri: String,
+  params: List(#(String, String)),
+) -> Response {
   let sep = case string.contains(redirect_uri, "?") {
     True -> "&"
     False -> "?"
@@ -235,6 +266,9 @@ pub fn authorize(ctx: Ctx, req: Request) -> Response {
 }
 
 fn authorize_get(ctx: Ctx, req: Request) -> Response {
+  // Sign in first: resolving a URL client_id fetches it, which anonymous
+  // visitors must not be able to trigger.
+  use user <- session.require_user(ctx, req)
   let q = wisp.get_query(req)
   let param = fn(name) { list.key_find(q, name) |> result.unwrap("") }
   let client_id = param("client_id")
@@ -243,7 +277,8 @@ fn authorize_get(ctx: Ctx, req: Request) -> Response {
     Error(reason) -> error_page(ctx, reason)
     Ok(client) ->
       case list.any(client.redirect_uris, redirect_matches(_, redirect_uri)) {
-        False -> error_page(ctx, "redirect_uri is not registered for this client")
+        False ->
+          error_page(ctx, "redirect_uri is not registered for this client")
         True -> {
           let fail = fn(error, description) {
             redirect_with(redirect_uri, [
@@ -261,14 +296,17 @@ fn authorize_get(ctx: Ctx, req: Request) -> Response {
             resource_ok(ctx, param("resource"))
           {
             r, _, _, _, _ if r != "code" ->
-              fail("unsupported_response_type", "only response_type=code is supported")
-            _, "", _, _, _ -> fail("invalid_request", "PKCE code_challenge is required")
+              fail(
+                "unsupported_response_type",
+                "only response_type=code is supported",
+              )
+            _, "", _, _, _ ->
+              fail("invalid_request", "PKCE code_challenge is required")
             _, _, m, _, _ if m != "S256" ->
               fail("invalid_request", "code_challenge_method must be S256")
             _, _, _, Error(_), _ -> fail("invalid_scope", "unknown scope")
             _, _, _, _, False -> fail("invalid_target", "unknown resource")
             _, challenge, _, Ok(scope), True -> {
-              use user <- session.require_user(ctx, req)
               let id = sys.random_token(24)
               let request =
                 AuthRequest(
@@ -284,7 +322,10 @@ fn authorize_get(ctx: Ctx, req: Request) -> Response {
                 )
               store.update_lazy(ctx.store, fn(_s, e, _) {
                 store.EphemeralChanged(
-                  Ephemeral(..e, auth_requests: dict.insert(e.auth_requests, id, request)),
+                  Ephemeral(
+                    ..e,
+                    auth_requests: dict.insert(e.auth_requests, id, request),
+                  ),
                   Nil,
                 )
               })
@@ -296,7 +337,12 @@ fn authorize_get(ctx: Ctx, req: Request) -> Response {
   }
 }
 
-fn consent_page(ctx: Ctx, user: model.User, id: String, r: AuthRequest) -> Response {
+fn consent_page(
+  ctx: Ctx,
+  user: model.User,
+  id: String,
+  r: AuthRequest,
+) -> Response {
   let host = redirect_host(r.redirect_uri)
   let localhost_only = is_loopback(host)
   layout.respond(
@@ -319,18 +365,33 @@ fn consent_page(ctx: Ctx, user: model.User, id: String, r: AuthRequest) -> Respo
       ]),
       html.when(localhost_only, fn() {
         layout.notice(
-          "This client receives the result on your own machine (" <> host
+          "This client receives the result on your own machine ("
+          <> host
           <> "). Only approve if you just started connecting an agent here.",
         )
       }),
-      html.post_form("/oauth/authorize", [html.class("row")], [#("request", id)], [
-        layout.button("Approve", [#("type", "submit"), #("name", "decision"), #("value", "approve")]),
-        html.el(
-          "button",
-          [html.class("linkish"), #("type", "submit"), #("name", "decision"), #("value", "deny")],
-          [html.text("Deny")],
-        ),
-      ]),
+      html.post_form(
+        "/oauth/authorize",
+        [html.class("row")],
+        [#("request", id)],
+        [
+          layout.button("Approve", [
+            #("type", "submit"),
+            #("name", "decision"),
+            #("value", "approve"),
+          ]),
+          html.el(
+            "button",
+            [
+              html.class("linkish"),
+              #("type", "submit"),
+              #("name", "decision"),
+              #("value", "deny"),
+            ],
+            [html.text("Deny")],
+          ),
+        ],
+      ),
     ]),
   )
 }
@@ -355,14 +416,19 @@ fn authorize_post(ctx: Ctx, req: Request) -> Response {
           }
         })
       case found {
-        None -> error_page(ctx, "This authorization request has expired. Start again from your agent.")
+        None ->
+          error_page(
+            ctx,
+            "This authorization request has expired. Start again from your agent.",
+          )
         Some(r) ->
           case decision {
             "approve" -> {
               let code = sys.random_token(32)
               let issued =
                 store.update(ctx.store, fn(s, e, now) {
-                  let #(s, _) = state.ensure_grant(s, r.client_id, user.id, r.scope, now)
+                  let #(s, _) =
+                    state.ensure_grant(s, r.client_id, user.id, r.scope, now)
                   let entry =
                     OAuthCode(
                       user: user.id,
@@ -377,7 +443,11 @@ fn authorize_post(ctx: Ctx, req: Request) -> Response {
                     s,
                     Ephemeral(
                       ..e,
-                      oauth_codes: dict.insert(e.oauth_codes, sys.sha256_hex(code), entry),
+                      oauth_codes: dict.insert(
+                        e.oauth_codes,
+                        sys.sha256_hex(code),
+                        entry,
+                      ),
                     ),
                     [],
                     Nil,
@@ -426,12 +496,22 @@ pub fn token(ctx: Ctx, req: Request) -> Response {
       case value("grant_type") {
         "authorization_code" -> exchange_code(ctx, value)
         "refresh_token" -> refresh(ctx, value)
-        _ -> token_error("unsupported_grant_type", "use authorization_code or refresh_token")
+        _ ->
+          token_error(
+            "unsupported_grant_type",
+            "use authorization_code or refresh_token",
+          )
       }
   }
 }
 
-fn issue(ctx: Ctx, grant_id: Int, scope: String, resource: String, family: Option(String)) -> Response {
+fn issue(
+  ctx: Ctx,
+  grant_id: Int,
+  scope: String,
+  resource: String,
+  family: Option(String),
+) -> Response {
   let access = sys.random_token(32)
   let refresh_token = sys.random_token(32)
   let family = option.unwrap(family, sys.random_token(12))
@@ -475,7 +555,14 @@ fn issue(ctx: Ctx, grant_id: Int, scope: String, resource: String, family: Optio
         ]),
         200,
       )
-    Error(e) -> json_response(json.object([#("error", json.string("server_error")), #("error_description", json.string(e))]), 500)
+    Error(e) ->
+      json_response(
+        json.object([
+          #("error", json.string("server_error")),
+          #("error_description", json.string(e)),
+        ]),
+        500,
+      )
   }
 }
 
@@ -507,14 +594,17 @@ fn exchange_code(ctx: Ctx, value: fn(String) -> String) -> Response {
       {
         False, _, _, _ -> token_error("invalid_grant", "client_id mismatch")
         _, False, _, _ -> token_error("invalid_grant", "redirect_uri mismatch")
-        _, _, False, _ -> token_error("invalid_grant", "PKCE verification failed")
+        _, _, False, _ ->
+          token_error("invalid_grant", "PKCE verification failed")
         _, _, _, False -> token_error("invalid_target", "unknown resource")
         True, True, True, True -> {
           let grant =
             store.read(ctx.store, fn(s, _) {
               dict.values(s.oauth_grants)
               |> list.find(fn(g) {
-                g.client_id == c.client_id && g.user == c.user && g.revoked_at == None
+                g.client_id == c.client_id
+                && g.user == c.user
+                && g.revoked_at == None
               })
             })
           case grant {
@@ -541,7 +631,8 @@ fn refresh(ctx: Ctx, value: fn(String) -> String) -> Response {
         Some(t) if t.kind == model.RefreshToken ->
           case t.used_at, state.grant(s, t.grant) {
             // reuse of a rotated refresh token: revoke the whole family
-            Some(_), _ -> store.Changed(state.revoke_family(s, t.family), e, [], Reused)
+            Some(_), _ ->
+              store.Changed(state.revoke_family(s, t.family), e, [], Reused)
             None, Some(g) if g.revoked_at == None && t.expires_at > now ->
               case client_id == "" || client_id == g.client_id {
                 True ->
@@ -559,10 +650,23 @@ fn refresh(ctx: Ctx, value: fn(String) -> String) -> Response {
       }
     })
   case outcome {
-    Ok(Rotate(grant, scope, resource, family)) -> issue(ctx, grant, scope, resource, Some(family))
-    Ok(Reused) -> token_error("invalid_grant", "refresh token reuse detected; sign in again")
-    Ok(Invalid) -> token_error("invalid_grant", "unknown or expired refresh token")
-    Error(e) -> json_response(json.object([#("error", json.string("server_error")), #("error_description", json.string(e))]), 500)
+    Ok(Rotate(grant, scope, resource, family)) ->
+      issue(ctx, grant, scope, resource, Some(family))
+    Ok(Reused) ->
+      token_error(
+        "invalid_grant",
+        "refresh token reuse detected; sign in again",
+      )
+    Ok(Invalid) ->
+      token_error("invalid_grant", "unknown or expired refresh token")
+    Error(e) ->
+      json_response(
+        json.object([
+          #("error", json.string("server_error")),
+          #("error_description", json.string(e)),
+        ]),
+        500,
+      )
   }
 }
 
@@ -572,18 +676,39 @@ pub fn register(ctx: Ctx, req: Request) -> Response {
   case ctx.config.mcp.dynamic_client_registration {
     False -> wisp.not_found()
     True ->
-      case sys.rate_limit("oauth-register:" <> session.client_ip(req), 20, 3_600_000) {
+      case
+        sys.rate_limit(
+          "oauth-register:" <> session.client_ip(req),
+          20,
+          3_600_000,
+        )
+      {
         False -> token_error("slow_down", "too many registrations")
         True -> {
           use body <- wisp.require_json(req)
           let decoder = {
-            use redirect_uris <- decode.field("redirect_uris", decode.list(decode.string))
-            use client_name <- decode.optional_field("client_name", "MCP client", decode.string)
-            use method <- decode.optional_field("token_endpoint_auth_method", "none", decode.string)
+            use redirect_uris <- decode.field(
+              "redirect_uris",
+              decode.list(decode.string),
+            )
+            use client_name <- decode.optional_field(
+              "client_name",
+              "MCP client",
+              decode.string,
+            )
+            use method <- decode.optional_field(
+              "token_endpoint_auth_method",
+              "none",
+              decode.string,
+            )
             decode.success(#(redirect_uris, client_name, method))
           }
           case decode.run(body, decoder) {
-            Error(_) -> registration_error("invalid_client_metadata", "redirect_uris is required")
+            Error(_) ->
+              registration_error(
+                "invalid_client_metadata",
+                "redirect_uris is required",
+              )
             Ok(#(uris, name, method)) ->
               case uris != [] && list.all(uris, valid_redirect_uri), method {
                 False, _ ->
@@ -615,7 +740,13 @@ pub fn register(ctx: Ctx, req: Request) -> Response {
                       #("client_id_issued_at", json.int(now / 1000)),
                       #("client_name", json.string(client.client_name)),
                       #("redirect_uris", json.array(uris, json.string)),
-                      #("grant_types", json.array(["authorization_code", "refresh_token"], json.string)),
+                      #(
+                        "grant_types",
+                        json.array(
+                          ["authorization_code", "refresh_token"],
+                          json.string,
+                        ),
+                      ),
                       #("response_types", json.array(["code"], json.string)),
                       #("token_endpoint_auth_method", json.string("none")),
                     ]),
@@ -646,8 +777,10 @@ pub fn revoke(ctx: Ctx, req: Request) -> Response {
       case state.token(s, sha) {
         Some(t) ->
           case t.kind {
-            model.RefreshToken -> store.Changed(state.revoke_family(s, t.family), e, [], Nil)
-            model.AccessToken -> store.Changed(state.delete_token(s, sha), e, [], Nil)
+            model.RefreshToken ->
+              store.Changed(state.revoke_family(s, t.family), e, [], Nil)
+            model.AccessToken ->
+              store.Changed(state.delete_token(s, sha), e, [], Nil)
           }
         None -> store.NoChange(Nil)
       }
@@ -657,7 +790,10 @@ pub fn revoke(ctx: Ctx, req: Request) -> Response {
 
 /// Validate a bearer token for the MCP endpoint: returns the user id and
 /// granted scope.
-pub fn authenticate(ctx: Ctx, token: String) -> Option(#(model.User, String, Int)) {
+pub fn authenticate(
+  ctx: Ctx,
+  token: String,
+) -> Option(#(model.User, String, Int)) {
   let sha = sys.sha256_hex(token)
   let now = sys.now_ms()
   let found =

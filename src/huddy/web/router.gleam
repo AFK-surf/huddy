@@ -23,7 +23,9 @@ import mist
 import wisp
 import wisp/wisp_mist
 
-pub fn handler(ctx: Ctx) -> fn(Request(mist.Connection)) -> Response(mist.ResponseData) {
+pub fn handler(
+  ctx: Ctx,
+) -> fn(Request(mist.Connection)) -> Response(mist.ResponseData) {
   let web = wisp_mist.handler(handle_web(ctx, _), ctx.config.secret_key)
   fn(req: Request(mist.Connection)) {
     let ip = client_ip(ctx, req)
@@ -33,7 +35,8 @@ pub fn handler(ctx: Ctx) -> fn(Request(mist.Connection)) -> Response(mist.Respon
     case request.path_segments(req) {
       ["events"] -> sse.handle(ctx, req)
       ["mcp"] -> transport.handle(ctx, req, transport.Bearer)
-      ["mcp", "k", secret] -> transport.handle(ctx, req, transport.Secret(secret))
+      ["mcp", "k", secret] ->
+        transport.handle(ctx, req, transport.Secret(secret))
       ["mcp", ..] ->
         response.new(404) |> response.set_body(mist.Bytes(bytes_tree.new()))
       _ -> web(req)
@@ -50,7 +53,11 @@ fn client_ip(ctx: Ctx, req: Request(mist.Connection)) -> String {
   }
   let trusted = fn(addr: String) {
     case net.parse_ip(addr) {
-      Ok(ip) -> list.any(ctx.config.trusted_proxies, net.cidr_contains(_, net.normalize(ip)))
+      Ok(ip) ->
+        list.any(ctx.config.trusted_proxies, net.cidr_contains(
+          _,
+          net.normalize(ip),
+        ))
       Error(_) -> False
     }
   }

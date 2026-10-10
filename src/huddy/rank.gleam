@@ -92,7 +92,10 @@ pub fn compute(
   let agent_ok = fn(agent: Agent) {
     let handle = state.handle_of(s, agent.owner)
     option.unwrap(option.map(filters.owner, fn(o) { o == handle }), True)
-    && option.unwrap(option.map(filters.project, fn(p) { p == agent.project }), True)
+    && option.unwrap(
+      option.map(filters.project, fn(p) { p == agent.project }),
+      True,
+    )
     && option.unwrap(option.map(filters.name, fn(n) { n == agent.name }), True)
   }
   let agents =
@@ -108,7 +111,14 @@ pub fn compute(
   let open =
     state.open_items(s)
     |> list.filter(fn(i) { set.contains(agent_ids, i.agent) })
-  let view_of = fn(i: Item) { item_view(s, i, priority(i, away(i.agent), stale_threshold, now), away(i.agent)) }
+  let view_of = fn(i: Item) {
+    item_view(
+      s,
+      i,
+      priority(i, away(i.agent), stale_threshold, now),
+      away(i.agent),
+    )
+  }
   let visible_items = list.filter(open, fn(i) { option.is_none(i.hidden_by) })
   let hidden =
     list.filter(open, fn(i) { option.is_some(i.hidden_by) })
@@ -145,14 +155,20 @@ pub fn compute(
     |> list.filter(fn(i) { i.kind == model.Task })
     |> list.map(view_of)
   let #(tasks_shown, tasks_more) =
-    select(tasks, slots(expand == "tasks", display.slots_tasks), display.cap_tasks, previous.tasks)
+    select(
+      tasks,
+      slots(expand == "tasks", display.slots_tasks),
+      display.cap_tasks,
+      previous.tasks,
+    )
 
   // goals: one per agent; overlapping goals merge into one group
   let goal_views =
     visible_items
     |> list.filter(fn(i) { i.kind == model.Goal })
     |> list.map(fn(g) {
-      let agent_items = list.filter(open, fn(i) { i.agent == g.agent && i.kind != model.Goal })
+      let agent_items =
+        list.filter(open, fn(i) { i.agent == g.agent && i.kind != model.Goal })
       let best =
         agent_items
         |> list.map(fn(i) { priority(i, away(i.agent), stale_threshold, now) })
@@ -167,16 +183,26 @@ pub fn compute(
     })
   let groups = group_goals(goal_views)
   let #(goals_shown, goals_more) =
-    select_groups(groups, slots(expand == "goals", display.slots_goals), previous.goals)
+    select_groups(
+      groups,
+      slots(expand == "goals", display.slots_goals),
+      previous.goals,
+    )
 
   let agent_views =
     agents
     |> list.filter(fn(a) {
-      list.any(open, fn(i) { i.agent == a.id }) || now - a.last_seen_at < 86_400_000
+      list.any(open, fn(i) { i.agent == a.id })
+      || now - a.last_seen_at < 86_400_000
     })
     |> list.map(fn(a) {
       let handle = state.handle_of(s, a.owner)
-      AgentView(agent: a, label: model.agent_label(handle, a), owner_handle: handle, away: away(a.id))
+      AgentView(
+        agent: a,
+        label: model.agent_label(handle, a),
+        owner_handle: handle,
+        away: away(a.id),
+      )
     })
     |> list.sort(fn(a, b) {
       case a.away, b.away {
@@ -217,13 +243,19 @@ fn slots(expanded: Bool, n: Int) -> Int {
 }
 
 /// Priority per the design (§8). Blocking decisions are pinned elsewhere.
-pub fn priority(item: Item, away: Bool, stale_threshold: Float, now: Int) -> Float {
+pub fn priority(
+  item: Item,
+  away: Bool,
+  stale_threshold: Float,
+  now: Int,
+) -> Float {
   let imp = case item.importance {
     Some(score) -> score /. 3.0
     None -> 0.33
   }
   let fresh = exp(int.to_float(item.updated_at - now) /. { 6.0 *. hour })
-  let wait = float.min(1.0, int.to_float(now - item.created_at) /. { 24.0 *. hour })
+  let wait =
+    float.min(1.0, int.to_float(now - item.created_at) /. { 24.0 *. hour })
   let stale = case item.stale_p {
     Some(p) if p >=. stale_threshold -> p
     _ -> 0.0
@@ -299,7 +331,8 @@ pub fn select(
     })
     |> list.sort(fn(a, b) {
       case float.compare(b.1, a.1) {
-        order.Eq -> int.compare({ b.0 }.item.updated_at, { a.0 }.item.updated_at)
+        order.Eq ->
+          int.compare({ b.0 }.item.updated_at, { a.0 }.item.updated_at)
         o -> o
       }
     })
@@ -307,16 +340,19 @@ pub fn select(
   let #(first, _) =
     list.fold(boosted, #([], dict.new()), fn(acc, v) {
       let #(chosen, counts) = acc
-      let n = dict.get(counts, v.item.agent) |> option.from_result |> option.unwrap(0)
+      let n =
+        dict.get(counts, v.item.agent) |> option.from_result |> option.unwrap(0)
       case list.length(chosen) < slots && n < cap {
         True -> #([v, ..chosen], dict.insert(counts, v.item.agent, n + 1))
         False -> acc
       }
     })
   let chosen_ids = set.from_list(list.map(first, fn(v) { v.item.id }))
-  let rest = list.filter(boosted, fn(v) { !set.contains(chosen_ids, v.item.id) })
+  let rest =
+    list.filter(boosted, fn(v) { !set.contains(chosen_ids, v.item.id) })
   let room = int.max(slots - list.length(first), 0)
-  let shown = list.append(first, list.take(rest, room)) |> list.sort(by_priority)
+  let shown =
+    list.append(first, list.take(rest, room)) |> list.sort(by_priority)
   #(shown, list.length(candidates) - list.length(shown))
 }
 

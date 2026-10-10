@@ -186,15 +186,23 @@ fn describe_json_error(error: json.DecodeError) -> String {
 
 /// A string, or `{"$env": "NAME"}` resolved from the environment.
 fn str() -> Decoder(String) {
-  let from_env = {
-    use name <- decode.field("$env", decode.string)
-    case sys.getenv(name) {
-      Ok(value) -> decode.success(value)
-      Error(_) ->
-        decode.failure("", "String (environment variable " <> name <> " is unset)")
-    }
+  use value <- decode.then(decode.dynamic)
+  case decode.run(value, decode.string) {
+    Ok(s) -> decode.success(s)
+    Error(_) ->
+      case decode.run(value, decode.at(["$env"], decode.string)) {
+        Ok(name) ->
+          case sys.getenv(name) {
+            Ok(v) -> decode.success(v)
+            Error(_) ->
+              decode.failure(
+                "",
+                "String (environment variable " <> name <> " is unset)",
+              )
+          }
+        Error(_) -> decode.failure("", "String or {\"$env\": NAME}")
+      }
   }
-  decode.one_of(decode.string, [from_env])
 }
 
 fn opt(
@@ -210,7 +218,12 @@ fn number() -> Decoder(Float) {
   decode.one_of(decode.float, [decode.int |> decode.map(int.to_float)])
 }
 
-fn section(name: String, inner: Decoder(a), default: a, next: fn(a) -> Decoder(b)) {
+fn section(
+  name: String,
+  inner: Decoder(a),
+  default: a,
+  next: fn(a) -> Decoder(b),
+) {
   decode.optional_field(name, default, inner, next)
 }
 
@@ -249,7 +262,16 @@ pub fn decoder() -> Decoder(Config) {
     retention_decoder(),
     Retention(30, 90, 14, 90),
   )
-  let trusted_proxies = list.filter_map(trusted, net.parse_cidr)
+  use trusted_proxies <- decode.then(
+    case list.try_map(trusted, net.parse_cidr) {
+      Ok(cidrs) -> decode.success(cidrs)
+      Error(_) ->
+        decode.failure(
+          [],
+          "server.trusted_proxies: IP addresses or CIDR ranges",
+        )
+    },
+  )
   decode.success(Config(
     team_name:,
     base_url:,
@@ -330,7 +352,10 @@ fn email_decoder() -> Decoder(Email) {
     }
     "log" -> decode.success(Email(from:, transport: LogTransport))
     other ->
-      decode.failure(Email(from:, transport: LogTransport), "\"smtp\" or \"log\", got " <> other)
+      decode.failure(
+        Email(from:, transport: LogTransport),
+        "\"smtp\" or \"log\", got " <> other,
+      )
   }
 }
 
@@ -348,18 +373,14 @@ fn default_mcp() -> Mcp {
 fn mcp_decoder() -> Decoder(Mcp) {
   let d = default_mcp()
   use secret_urls <- opt("secret_urls", d.secret_urls, decode.bool)
-  use oauth <- opt(
-    "oauth",
-    #(60, 30, True, True, []),
-    {
-      use a <- opt("access_token_ttl_minutes", 60, decode.int)
-      use r <- opt("refresh_token_ttl_days", 30, decode.int)
-      use cimd <- opt("client_id_metadata_documents", True, decode.bool)
-      use dcr <- opt("dynamic_client_registration", True, decode.bool)
-      use hosts <- opt("trusted_client_hosts", [], decode.list(str()))
-      decode.success(#(a, r, cimd, dcr, hosts))
-    },
-  )
+  use oauth <- opt("oauth", #(60, 30, True, True, []), {
+    use a <- opt("access_token_ttl_minutes", 60, decode.int)
+    use r <- opt("refresh_token_ttl_days", 30, decode.int)
+    use cimd <- opt("client_id_metadata_documents", True, decode.bool)
+    use dcr <- opt("dynamic_client_registration", True, decode.bool)
+    use hosts <- opt("trusted_client_hosts", [], decode.list(str()))
+    decode.success(#(a, r, cimd, dcr, hosts))
+  })
   let #(a, r, cimd, dcr, hosts) = oauth
   decode.success(Mcp(
     secret_urls:,
@@ -451,7 +472,11 @@ fn review_decoder() -> Decoder(Review) {
     d.sweep_interval_minutes,
     decode.int,
   )
-  use sweep_idle_hours <- opt("sweep_idle_hours", d.sweep_idle_hours, decode.int)
+  use sweep_idle_hours <- opt(
+    "sweep_idle_hours",
+    d.sweep_idle_hours,
+    decode.int,
+  )
   use untouched_days <- opt("untouched_days", d.untouched_days, decode.int)
   use open_tasks_guideline <- opt(
     "open_tasks_guideline",
@@ -484,7 +509,11 @@ fn notify_decoder() -> Decoder(Notify) {
   use browser <- opt("browser", True, decode.bool)
   use after <- opt("email_blocking_after_minutes", 10, decode.int)
   use non_blocking <- opt("email_non_blocking", False, decode.bool)
-  decode.success(Notify(browser:, email_blocking_after_minutes: after, email_non_blocking: non_blocking))
+  decode.success(Notify(
+    browser:,
+    email_blocking_after_minutes: after,
+    email_non_blocking: non_blocking,
+  ))
 }
 
 pub fn default_display() -> Display {
@@ -501,19 +530,31 @@ pub fn default_display() -> Display {
 
 fn display_decoder() -> Decoder(Display) {
   let d = default_display()
-  use slots <- opt("slots", #(d.slots_goals, d.slots_tasks, d.slots_decisions), {
-    use g <- opt("goals", d.slots_goals, decode.int)
-    use t <- opt("tasks", d.slots_tasks, decode.int)
-    use dd <- opt("decisions", d.slots_decisions, decode.int)
-    decode.success(#(g, t, dd))
-  })
+  use slots <- opt(
+    "slots",
+    #(d.slots_goals, d.slots_tasks, d.slots_decisions),
+    {
+      use g <- opt("goals", d.slots_goals, decode.int)
+      use t <- opt("tasks", d.slots_tasks, decode.int)
+      use dd <- opt("decisions", d.slots_decisions, decode.int)
+      decode.success(#(g, t, dd))
+    },
+  )
   use cap <- opt("per_agent_cap", #(d.cap_tasks, d.cap_decisions), {
     use t <- opt("tasks", d.cap_tasks, decode.int)
     use dd <- opt("decisions", d.cap_decisions, decode.int)
     decode.success(#(t, dd))
   })
-  use away <- opt("agent_away_after_minutes", d.agent_away_after_minutes, decode.int)
-  use rerank <- opt("rerank_interval_seconds", d.rerank_interval_seconds, decode.int)
+  use away <- opt(
+    "agent_away_after_minutes",
+    d.agent_away_after_minutes,
+    decode.int,
+  )
+  use rerank <- opt(
+    "rerank_interval_seconds",
+    d.rerank_interval_seconds,
+    decode.int,
+  )
   decode.success(Display(
     slots_goals: slots.0,
     slots_tasks: slots.1,
@@ -529,7 +570,11 @@ fn limits_decoder() -> Decoder(Limits) {
   use t <- opt("title_max_chars", 120, decode.int)
   use d <- opt("detail_max_chars", 2000, decode.int)
   use w <- opt("writes_per_agent_per_minute", 12, decode.int)
-  decode.success(Limits(title_max_chars: t, detail_max_chars: d, writes_per_agent_per_minute: w))
+  decode.success(Limits(
+    title_max_chars: t,
+    detail_max_chars: d,
+    writes_per_agent_per_minute: w,
+  ))
 }
 
 fn retention_decoder() -> Decoder(Retention) {
@@ -537,7 +582,12 @@ fn retention_decoder() -> Decoder(Retention) {
   use e <- opt("events_days", 90, decode.int)
   use jd <- opt("judgment_detail_days", 14, decode.int)
   use j <- opt("judgments_days", 90, decode.int)
-  decode.success(Retention(closed_items_days: c, events_days: e, judgment_detail_days: jd, judgments_days: j))
+  decode.success(Retention(
+    closed_items_days: c,
+    events_days: e,
+    judgment_detail_days: jd,
+    judgments_days: j,
+  ))
 }
 
 // --- validation ------------------------------------------------------------
@@ -573,22 +623,24 @@ fn validate(config: Config) -> Result(Config, String) {
     True -> Ok(Nil)
     False -> Error("config: secret_key must be at least 32 characters")
   })
-  use _ <- result.try(case config.auth.allowed_domains, config.auth.allowed_emails
-  {
-    [], [] ->
-      Error(
-        "config: auth.allowed_domains or auth.allowed_emails must list at least one entry",
-      )
-    _, _ -> Ok(Nil)
-  })
-  use _ <- result.try(case config.decision_model.enabled, config.decision_model.api_key
-  {
-    True, "" ->
-      Error(
-        "config: decision_model.api_key is required when decision_model.enabled is true",
-      )
-    _, _ -> Ok(Nil)
-  })
+  use _ <- result.try(
+    case config.auth.allowed_domains, config.auth.allowed_emails {
+      [], [] ->
+        Error(
+          "config: auth.allowed_domains or auth.allowed_emails must list at least one entry",
+        )
+      _, _ -> Ok(Nil)
+    },
+  )
+  use _ <- result.try(
+    case config.decision_model.enabled, config.decision_model.api_key {
+      True, "" ->
+        Error(
+          "config: decision_model.api_key is required when decision_model.enabled is true",
+        )
+      _, _ -> Ok(Nil)
+    },
+  )
   Ok(Config(..config, base_url:))
 }
 
@@ -597,8 +649,8 @@ fn validate(config: Config) -> Result(Config, String) {
 /// Is this (already lowercased) email allowed to sign in?
 pub fn email_allowed(config: Config, email: String) -> Bool {
   let email = string.lowercase(string.trim(email))
-  case string.split_once(email, "@") {
-    Ok(#(local, domain)) if local != "" && domain != "" ->
+  case valid_email_syntax(email), string.split_once(email, "@") {
+    True, Ok(#(local, domain)) if local != "" && domain != "" ->
       list.contains(config.auth.allowed_emails, email)
       || list.any(config.auth.allowed_domains, fn(allowed) {
         case string.starts_with(allowed, "*.") {
@@ -606,8 +658,20 @@ pub fn email_allowed(config: Config, email: String) -> Bool {
           False -> domain == allowed
         }
       })
-    _ -> False
+    _, _ -> False
   }
+}
+
+/// Printable ASCII only (no spaces or control characters, so nothing can
+/// smuggle a header into an e-mail), exactly one "@", at most 254 bytes.
+pub fn valid_email_syntax(email: String) -> Bool {
+  string.byte_size(email) <= 254
+  && list.length(string.split(email, "@")) == 2
+  && string.to_utf_codepoints(email)
+  |> list.all(fn(cp) {
+    let n = string.utf_codepoint_to_int(cp)
+    n > 32 && n < 127 && n != 34 && n != 60 && n != 62 && n != 44
+  })
 }
 
 /// The canonical MCP resource URI (the OAuth audience).

@@ -34,7 +34,10 @@ pub fn load(ctx: Ctx, viewer: User, filters: rank.Filters) -> Board {
   let month_start = now - 30 * 86_400_000
   let #(unseen, tokens) =
     store.read(ctx.store, fn(s, _) {
-      #(rank.unseen_decisions_for(s, viewer.id), state.tokens_since(s, month_start))
+      #(
+        rank.unseen_decisions_for(s, viewer.id),
+        state.tokens_since(s, month_start),
+      )
     })
   Board(
     view:,
@@ -93,7 +96,9 @@ pub fn render(ctx: Ctx, board: Board) -> String {
   }
   let #(footer, rest) =
     zones(ctx, board) |> list.partition(fn(z) { z.0 == "zone-footer" })
-  let raw = fn(zs: List(#(String, String))) { list.map(zs, fn(z) { html.raw(z.1) }) }
+  let raw = fn(zs: List(#(String, String))) {
+    list.map(zs, fn(z) { html.raw(z.1) })
+  }
   html.document(
     title,
     [html.el("script", [#("src", "/static/huddy.js"), #("defer", "")], [])],
@@ -138,26 +143,39 @@ fn header(ctx: Ctx, board: Board) -> String {
       html.div([html.class("stats")], [
         html.span([], [html.text(plural(list.length(v.agents), "agent"))]),
         html.when(blocked > 0, fn() {
-          html.span([html.class("blk")], [html.text(int.to_string(blocked) <> " blocked")])
+          html.span([html.class("blk")], [
+            html.text(int.to_string(blocked) <> " blocked"),
+          ])
         }),
         html.span([html.class("live"), html.id("live")], [html.text("live")]),
         html.when(ctx.config.notify.browser, fn() {
           html.el(
             "button",
-            [html.class("linkish"), html.id("notify-toggle"), #("type", "button"), #("hidden", "")],
+            [
+              html.class("linkish"),
+              html.id("notify-toggle"),
+              #("type", "button"),
+              #("hidden", ""),
+            ],
             [html.text("🔔 notify me")],
           )
         }),
         html.a("/settings", [], [html.text("you: " <> board.viewer.handle)]),
       ]),
       html.span(
-        [html.id("count"), #("data-count", int.to_string(board.unseen)), #("hidden", "")],
+        [
+          html.id("count"),
+          #("data-count", int.to_string(board.unseen)),
+          #("hidden", ""),
+        ],
         [],
       ),
       case board.storage_error {
         Some(e) ->
           html.div([html.class("banner")], [
-            html.text("Storage error — changes are kept in memory and retried: " <> e),
+            html.text(
+              "Storage error — changes are kept in memory and retried: " <> e,
+            ),
           ])
         None -> html.none()
       },
@@ -178,8 +196,10 @@ fn plural(n: Int, word: String) -> String {
 fn agents(board: Board) -> String {
   let f = board.view.filters
   let filtered = f.owner != None || f.project != None || f.name != None
-  html.to_string(
-    html.el("nav", [html.id("zone-agents"), html.class("agents"), #("aria-label", "Agents")], list.flatten([
+  html.to_string(html.el(
+    "nav",
+    [html.id("zone-agents"), html.class("agents"), #("aria-label", "Agents")],
+    list.flatten([
       list.map(board.view.agents, fn(a) {
         let href =
           "/"
@@ -201,7 +221,14 @@ fn agents(board: Board) -> String {
             ),
           ],
           [
-            html.raw(sketch.frame("chip:" <> a.label, sketch.Rect, 200, 28, "ink", None)),
+            html.raw(sketch.frame(
+              "chip:" <> a.label,
+              sketch.Rect,
+              200,
+              28,
+              "ink",
+              None,
+            )),
             html.span([html.class("dot")], []),
             html.text(a.label),
             html.when(a.away, fn() { html.text(" · away") }),
@@ -220,8 +247,8 @@ fn agents(board: Board) -> String {
           ])
         }),
       ],
-    ])),
-  )
+    ]),
+  ))
 }
 
 // --- decisions -------------------------------------------------------------------
@@ -251,7 +278,10 @@ fn decisions(board: Board) -> String {
         ]),
       ]),
       case all {
-        [] -> html.el("p", [html.class("muted")], [html.text("Nothing needs a human right now.")])
+        [] ->
+          html.el("p", [html.class("muted")], [
+            html.text("Nothing needs a human right now."),
+          ])
         _ ->
           html.div(
             [html.class("decisions")],
@@ -279,25 +309,39 @@ fn decision_card(board: Board, v: ItemView) -> Node {
   let yours = v.owner == board.viewer.id
   let s = seed(v)
   html.el("article", [html.class("card sk"), html.id(model.item_ref(item.id))], [
-    html.raw(sketch.frame(s, sketch.Rect, 280, 200, case item.blocking {
-      True -> "dec"
-      False -> "ink"
-    }, case item.blocking {
-      True -> Some("dec-bg")
-      False -> None
-    })),
+    html.raw(
+      sketch.frame(
+        s,
+        sketch.Rect,
+        280,
+        200,
+        case item.blocking {
+          True -> "dec"
+          False -> "ink"
+        },
+        case item.blocking {
+          True -> Some("dec-bg")
+          False -> None
+        },
+      ),
+    ),
     case item.blocking {
       True ->
         html.span([html.class("tag sk")], [
           html.raw(sketch.frame(s <> ":tag", sketch.Rect, 90, 24, "red", None)),
           html.text("BLOCKED"),
         ])
-      False -> html.span([html.class("ic")], [icon(sketch.DecisionIcon(False), s)])
+      False ->
+        html.span([html.class("ic")], [icon(sketch.DecisionIcon(False), s)])
     },
     html.div([html.class("title")], [html.text(item.title)]),
     html.div([html.class("meta")], [
-      html.text(v.agent_label <> " · waiting " <> fmt.age(board.now, item.created_at)),
-      html.when(yours, fn() { html.span([html.class("yours")], [html.text(" · yours")]) }),
+      html.text(
+        v.agent_label <> " · waiting " <> fmt.age(board.now, item.created_at),
+      ),
+      html.when(yours, fn() {
+        html.span([html.class("yours")], [html.text(" · yours")])
+      }),
       html.when(v.away, fn() { html.text(" · agent away") }),
     ]),
     detail(item.detail, "detail"),
@@ -328,7 +372,14 @@ fn decision_card(board: Board, v: ItemView) -> Node {
             [#("return_to", "/" <> query_string(board.view.filters))],
             [
               html.el("button", [html.class("btn sk"), #("type", "submit")], [
-                html.raw(sketch.frame(s <> ":seen", sketch.Rect, 70, 28, "ink", None)),
+                html.raw(sketch.frame(
+                  s <> ":seen",
+                  sketch.Rect,
+                  70,
+                  28,
+                  "ink",
+                  None,
+                )),
                 html.text("seen"),
               ]),
             ],
@@ -356,7 +407,9 @@ fn hide_control(board: Board, v: ItemView) -> Node {
           ],
           [],
         ),
-        html.el("button", [html.class("linkish"), #("type", "submit")], [html.text("hide it")]),
+        html.el("button", [html.class("linkish"), #("type", "submit")], [
+          html.text("hide it"),
+        ]),
       ],
     ),
   ])
@@ -375,12 +428,16 @@ fn flags(v: ItemView) -> Node {
     },
     case v.item.stale_p {
       Some(_) ->
-        html.div([html.class("sub")], [html.text("? may be outdated — its agent has been told")])
+        html.div([html.class("sub")], [
+          html.text("? may be outdated — its agent has been told"),
+        ])
       None -> html.none()
     },
     html.when(v.item.flagged, fn() {
       html.div([html.class("sub flagged")], [
-        html.text("⚠ flagged by review: may contain instructions aimed at agents"),
+        html.text(
+          "⚠ flagged by review: may contain instructions aimed at agents",
+        ),
       ])
     }),
   ])
@@ -406,9 +463,14 @@ pub fn linkify(text: String) -> List(Node) {
   text
   |> string.split(" ")
   |> list.map(fn(word) {
-    case string.starts_with(word, "https://") || string.starts_with(word, "http://") {
+    case
+      string.starts_with(word, "https://")
+      || string.starts_with(word, "http://")
+    {
       True ->
-        html.a(word, [#("rel", "noopener nofollow"), #("target", "_blank")], [html.text(word)])
+        html.a(word, [#("rel", "noopener nofollow"), #("target", "_blank")], [
+          html.text(word),
+        ])
       False -> html.text(word)
     }
   })
@@ -440,7 +502,8 @@ fn columns(board: Board) -> String {
       html.el("section", [html.class("zone")], [
         html.el("h2", [], [icon(sketch.GoalIcon, "h-g"), html.text("Goals")]),
         case v.goals {
-          [] -> html.el("p", [html.class("muted")], [html.text("No goals yet.")])
+          [] ->
+            html.el("p", [html.class("muted")], [html.text("No goals yet.")])
           goals -> html.div([html.class("goals")], list.map(goals, goal))
         },
         more(v.goals_more, "goals", v.filters),
@@ -458,8 +521,10 @@ fn columns(board: Board) -> String {
           ]),
         ]),
         case v.tasks {
-          [] -> html.el("p", [html.class("muted")], [html.text("No open tasks.")])
-          tasks -> html.div([html.class("tasks")], list.map(tasks, task(board, _)))
+          [] ->
+            html.el("p", [html.class("muted")], [html.text("No open tasks.")])
+          tasks ->
+            html.div([html.class("tasks")], list.map(tasks, task(board, _)))
         },
         more(v.tasks_more, "tasks", v.filters),
       ]),
@@ -471,7 +536,14 @@ fn goal(g: rank.GoalGroup) -> Node {
   let p = g.primary
   html.div([html.class("goal"), html.id(model.item_ref(p.item.id))], [
     html.div([html.class("bubble sk")], [
-      html.raw(sketch.frame(seed(p), sketch.Ellipse, 320, 90, "goal", Some("goal-bg"))),
+      html.raw(sketch.frame(
+        seed(p),
+        sketch.Ellipse,
+        320,
+        90,
+        "goal",
+        Some("goal-bg"),
+      )),
       html.text(p.item.title),
     ]),
     html.div(
@@ -485,10 +557,13 @@ fn goal(g: rank.GoalGroup) -> Node {
             }),
           ],
           [
-            html.text(v.agent_label <> case v.away {
-              True -> " (away)"
-              False -> ""
-            }),
+            html.text(
+              v.agent_label
+              <> case v.away {
+                True -> " (away)"
+                False -> ""
+              },
+            ),
           ],
         )
       }),
@@ -531,7 +606,9 @@ fn task(board: Board, v: ItemView) -> Node {
       ]),
       html.div([html.class("side")], [
         html.span([html.class("meta")], [
-          html.text(v.agent_label <> " · " <> fmt.age(board.now, item.updated_at)),
+          html.text(
+            v.agent_label <> " · " <> fmt.age(board.now, item.updated_at),
+          ),
         ]),
         hide_control(board, v),
       ]),
@@ -544,17 +621,21 @@ fn hidden(board: Board) -> String {
     html.el("section", [html.id("zone-hidden"), html.class("zone")], [
       html.el("h2", [], [html.text("Hidden by humans")]),
       case board.view.hidden {
-        [] -> html.el("p", [html.class("muted")], [html.text("Nothing is hidden.")])
+        [] ->
+          html.el("p", [html.class("muted")], [html.text("Nothing is hidden.")])
         items ->
           html.div(
             [html.class("tasks")],
             list.map(items, fn(v) {
               html.div([html.class("task")], [
-                icon(case v.item.kind {
-                  model.Goal -> sketch.GoalIcon
-                  model.Task -> sketch.TaskIcon
-                  model.Decision -> sketch.DecisionIcon(v.item.blocking)
-                }, seed(v)),
+                icon(
+                  case v.item.kind {
+                    model.Goal -> sketch.GoalIcon
+                    model.Task -> sketch.TaskIcon
+                    model.Decision -> sketch.DecisionIcon(v.item.blocking)
+                  },
+                  seed(v),
+                ),
                 html.div([], [
                   html.div([html.class("t")], [html.text(v.item.title)]),
                   html.div([html.class("sub")], [
@@ -574,7 +655,13 @@ fn hidden(board: Board) -> String {
                     "/items/" <> int.to_string(v.item.id) <> "/unhide",
                     [#("data-fetch", "")],
                     [#("return_to", "/" <> query_string(board.view.filters))],
-                    [html.el("button", [html.class("linkish"), #("type", "submit")], [html.text("un-hide")])],
+                    [
+                      html.el(
+                        "button",
+                        [html.class("linkish"), #("type", "submit")],
+                        [html.text("un-hide")],
+                      ),
+                    ],
                   ),
                 ]),
               ])
@@ -593,7 +680,11 @@ fn footer(ctx: Ctx, board: Board) -> String {
     html.el("footer", [html.id("zone-footer")], [
       html.when(ctx.config.decision_model.enabled, fn() {
         html.span([], [
-          html.text("decision model: " <> tokens(board.tokens_month) <> " tokens in 30 days"),
+          html.text(
+            "decision model: "
+            <> tokens(board.tokens_month)
+            <> " tokens in 30 days",
+          ),
         ])
       }),
       html.when(hidden_count > 0, fn() {
@@ -603,7 +694,9 @@ fn footer(ctx: Ctx, board: Board) -> String {
       }),
       html.a("/settings", [], [html.text("settings")]),
       html.post_form("/logout", [html.class("inline")], [], [
-        html.el("button", [html.class("linkish"), #("type", "submit")], [html.text("sign out")]),
+        html.el("button", [html.class("linkish"), #("type", "submit")], [
+          html.text("sign out"),
+        ]),
       ]),
     ]),
   )
@@ -620,8 +713,14 @@ fn legend() -> Node {
   html.div([html.class("legend")], [
     html.span([], [icon(sketch.GoalIcon, "l1"), html.text("goal")]),
     html.span([], [icon(sketch.TaskIcon, "l2"), html.text("task")]),
-    html.span([], [icon(sketch.DecisionIcon(True), "l3"), html.text("blocking decision")]),
-    html.span([], [icon(sketch.DecisionIcon(False), "l4"), html.text("non-blocking decision")]),
+    html.span([], [
+      icon(sketch.DecisionIcon(True), "l3"),
+      html.text("blocking decision"),
+    ]),
+    html.span([], [
+      icon(sketch.DecisionIcon(False), "l4"),
+      html.text("non-blocking decision"),
+    ]),
     html.span([html.class("faded")], [html.text("faded = may be outdated")]),
     html.span([], [html.text("≈ = overlapping work")]),
     html.span([], [html.text("⚠ = flagged by review")]),

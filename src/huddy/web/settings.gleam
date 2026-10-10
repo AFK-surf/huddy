@@ -34,7 +34,12 @@ pub fn handle(ctx: Ctx, req: Request, segments: List(String)) -> Response {
   }
 }
 
-fn post(ctx: Ctx, user: User, segments: List(String), form: wisp.FormData) -> Response {
+fn post(
+  ctx: Ctx,
+  user: User,
+  segments: List(String),
+  form: wisp.FormData,
+) -> Response {
   let value = session.form_value(form, _)
   case segments {
     ["links"] -> create_link(ctx, user, form)
@@ -42,7 +47,13 @@ fn post(ctx: Ctx, user: User, segments: List(String), form: wisp.FormData) -> Re
       let _ =
         store.update(ctx.store, fn(s, e, now) {
           case int.parse(id) {
-            Ok(link_id) -> store.Changed(state.revoke_link(s, link_id, user.id, now), e, [], Nil)
+            Ok(link_id) ->
+              store.Changed(
+                state.revoke_link(s, link_id, user.id, now),
+                e,
+                [],
+                Nil,
+              )
             Error(_) -> store.NoChange(Nil)
           }
         })
@@ -52,7 +63,13 @@ fn post(ctx: Ctx, user: User, segments: List(String), form: wisp.FormData) -> Re
       let _ =
         store.update(ctx.store, fn(s, e, now) {
           case int.parse(id) {
-            Ok(grant_id) -> store.Changed(state.revoke_grant(s, grant_id, user.id, now), e, [], Nil)
+            Ok(grant_id) ->
+              store.Changed(
+                state.revoke_grant(s, grant_id, user.id, now),
+                e,
+                [],
+                Nil,
+              )
             Error(_) -> store.NoChange(Nil)
           }
         })
@@ -78,7 +95,12 @@ fn post(ctx: Ctx, user: User, segments: List(String), form: wisp.FormData) -> Re
       let browser = value("notify_browser_non_blocking") == "on"
       let _ =
         store.update(ctx.store, fn(s, e, _) {
-          store.Changed(state.set_notify(s, user.id, email, browser), e, [], Nil)
+          store.Changed(
+            state.set_notify(s, user.id, email, browser),
+            e,
+            [],
+            Nil,
+          )
         })
       wisp.redirect("/settings")
     }
@@ -122,14 +144,25 @@ fn create_link(ctx: Ctx, user: User, form: wisp.FormData) -> Response {
           store.Changed(s, e, [], Nil)
         })
       case created {
-        Ok(_) -> page(ctx, user, Some(ctx.config.base_url <> "/mcp/k/" <> secret), None)
+        Ok(_) ->
+          page(
+            ctx,
+            user,
+            Some(ctx.config.base_url <> "/mcp/k/" <> secret),
+            None,
+          )
         Error(reason) -> page(ctx, user, None, Some(reason))
       }
     }
   }
 }
 
-fn page(ctx: Ctx, user: User, new_link: Option(String), error: Option(String)) -> Response {
+fn page(
+  ctx: Ctx,
+  user: User,
+  new_link: Option(String),
+  error: Option(String),
+) -> Response {
   let now = sys.now_ms()
   let #(links, grants, user) =
     store.read(ctx.store, fn(s, _) {
@@ -142,7 +175,11 @@ fn page(ctx: Ctx, user: User, new_link: Option(String), error: Option(String)) -
           }
           #(g, name)
         })
-      #(state.links_of(s, user.id), grants, state.user(s, user.id) |> option.unwrap(user))
+      #(
+        state.links_of(s, user.id),
+        grants,
+        state.user(s, user.id) |> option.unwrap(user),
+      )
     })
   let mcp_url = ctx.config.base_url <> "/mcp"
   layout.respond(
@@ -168,7 +205,9 @@ fn page(ctx: Ctx, user: User, new_link: Option(String), error: Option(String)) -
           <> "\"",
         ),
       ]),
-      html.when(ctx.config.mcp.secret_urls, fn() { links_section(links, new_link, now) }),
+      html.when(ctx.config.mcp.secret_urls, fn() {
+        links_section(links, new_link, now)
+      }),
       html.el("h2", [], [html.text("Connected clients (OAuth)")]),
       case grants {
         [] -> html.el("p", [html.class("muted")], [html.text("None yet.")])
@@ -181,13 +220,18 @@ fn page(ctx: Ctx, user: User, new_link: Option(String), error: Option(String)) -
               html.el("li", [], [
                 html.el("b", [], [html.text(name)]),
                 html.text(
-                  " · " <> g.scope <> " · approved " <> fmt.age(now, g.created_at) <> " ago"
+                  " · "
+                  <> g.scope
+                  <> " · approved "
+                  <> fmt.ago(now, g.created_at)
                   <> case g.last_used_at {
-                    Some(t) -> " · used " <> fmt.age(now, t) <> " ago"
+                    Some(t) -> " · used " <> fmt.ago(now, t)
                     None -> ""
                   },
                 ),
-                revoke_form("/settings/grants/" <> int.to_string(g.id) <> "/revoke"),
+                revoke_form(
+                  "/settings/grants/" <> int.to_string(g.id) <> "/revoke",
+                ),
               ])
             }),
           )
@@ -196,12 +240,20 @@ fn page(ctx: Ctx, user: User, new_link: Option(String), error: Option(String)) -
       html.post_form("/settings/handle", [html.class("row")], [], [
         layout.field(
           "Handle (the owner in owner/agent/project)",
-          layout.input([#("name", "handle"), #("value", user.handle), #("required", "")]),
+          layout.input([
+            #("name", "handle"),
+            #("value", user.handle),
+            #("required", ""),
+          ]),
         ),
         layout.button("Save", [#("type", "submit")]),
       ]),
       html.post_form("/settings/notify", [], [], [
-        checkbox("notify_email", user.notify_email, "E-mail me when my agent's blocking decision stays unseen"),
+        checkbox(
+          "notify_email",
+          user.notify_email,
+          "E-mail me when my agent's blocking decision stays unseen",
+        ),
         checkbox(
           "notify_browser_non_blocking",
           user.notify_browser_non_blocking,
@@ -233,11 +285,17 @@ fn checkbox(name: String, checked: Bool, label: String) -> Node {
 
 fn revoke_form(action: String) -> Node {
   html.post_form(action, [html.class("inline")], [], [
-    html.el("button", [html.class("linkish"), #("type", "submit")], [html.text("revoke")]),
+    html.el("button", [html.class("linkish"), #("type", "submit")], [
+      html.text("revoke"),
+    ]),
   ])
 }
 
-fn links_section(links: List(model.McpLink), new_link: Option(String), now: Int) -> Node {
+fn links_section(
+  links: List(model.McpLink),
+  new_link: Option(String),
+  now: Int,
+) -> Node {
   html.fragment([
     html.el("h3", [], [html.text("Secret URLs")]),
     html.el("p", [], [
@@ -274,22 +332,36 @@ fn links_section(links: List(model.McpLink), new_link: Option(String), now: Int)
                     <> option.unwrap(p, "*")
                 }
                 <> " · created "
-                <> fmt.age(now, l.created_at)
-                <> " ago"
+                <> fmt.ago(now, l.created_at)
                 <> case l.last_used_at {
-                  Some(t) -> " · used " <> fmt.age(now, t) <> " ago"
+                  Some(t) -> " · used " <> fmt.ago(now, t)
                   None -> " · never used"
                 },
               ),
-              revoke_form("/settings/links/" <> int.to_string(l.id) <> "/revoke"),
+              revoke_form(
+                "/settings/links/" <> int.to_string(l.id) <> "/revoke",
+              ),
             ])
           }),
         )
     },
     html.post_form("/settings/links", [html.class("grid")], [], [
-      layout.field("Label", layout.input([#("name", "label"), #("placeholder", "laptop codex"), #("maxlength", "60")])),
-      layout.field("Agent name (optional)", layout.input([#("name", "pinned_name"), #("placeholder", "codex")])),
-      layout.field("Project (optional)", layout.input([#("name", "pinned_project"), #("placeholder", "my-repo")])),
+      layout.field(
+        "Label",
+        layout.input([
+          #("name", "label"),
+          #("placeholder", "laptop codex"),
+          #("maxlength", "60"),
+        ]),
+      ),
+      layout.field(
+        "Agent name (optional)",
+        layout.input([#("name", "pinned_name"), #("placeholder", "codex")]),
+      ),
+      layout.field(
+        "Project (optional)",
+        layout.input([#("name", "pinned_project"), #("placeholder", "my-repo")]),
+      ),
       layout.field(
         "Scope",
         html.el("select", [#("name", "scope")], [

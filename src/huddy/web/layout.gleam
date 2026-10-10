@@ -1,9 +1,9 @@
 //// Page shells shared by the board, login, settings and consent pages.
 
+import gleam/option.{None}
 import huddy/ctx.{type Ctx}
 import huddy/web/html.{type Node}
 import huddy/web/sketch
-import gleam/option.{None}
 import wisp.{type Response}
 
 pub fn respond(status: Int, document: String) -> Response {
@@ -26,7 +26,14 @@ pub fn card_page(ctx: Ctx, title: String, body: List(Node)) -> String {
         html.span([html.class("team")], [html.text(ctx.config.team_name)]),
       ]),
       html.div([html.class("card sk")], [
-        html.raw(sketch.frame("card:" <> title, sketch.Rect, 560, 360, "ink", None)),
+        html.raw(sketch.frame(
+          "card:" <> title,
+          sketch.Rect,
+          560,
+          360,
+          "ink",
+          None,
+        )),
         html.fragment(body),
       ]),
     ]),

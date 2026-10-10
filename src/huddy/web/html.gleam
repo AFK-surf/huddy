@@ -12,7 +12,11 @@ pub type Node {
   Fragment(List(Node))
 }
 
-pub fn el(tag: String, attrs: List(#(String, String)), children: List(Node)) -> Node {
+pub fn el(
+  tag: String,
+  attrs: List(#(String, String)),
+  children: List(Node),
+) -> Node {
   Element(tag, attrs, children)
 }
 

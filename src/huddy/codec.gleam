@@ -26,19 +26,67 @@ pub fn encode_state(state: State, saved_at: Int) -> Json {
     #("format", json.int(format)),
     #("saved_at", json.int(saved_at)),
     #("next_id", encode_next_ids(state.next_id)),
-    #("users", json.array(dict.values(state.users) |> sort_by(fn(u) { u.id }), encode_user)),
-    #("web_sessions", json.array(dict.values(state.web_sessions), encode_session)),
-    #("agents", json.array(dict.values(state.agents) |> sort_by(fn(a) { a.id }), encode_agent)),
-    #("items", json.array(dict.values(state.items) |> sort_by(fn(i) { i.id }), encode_item)),
-    #("findings", json.array(dict.values(state.findings) |> sort_by(fn(f) { f.id }), encode_finding)),
+    #(
+      "users",
+      json.array(
+        dict.values(state.users) |> sort_by(fn(u) { u.id }),
+        encode_user,
+      ),
+    ),
+    #(
+      "web_sessions",
+      json.array(dict.values(state.web_sessions), encode_session),
+    ),
+    #(
+      "agents",
+      json.array(
+        dict.values(state.agents) |> sort_by(fn(a) { a.id }),
+        encode_agent,
+      ),
+    ),
+    #(
+      "items",
+      json.array(
+        dict.values(state.items) |> sort_by(fn(i) { i.id }),
+        encode_item,
+      ),
+    ),
+    #(
+      "findings",
+      json.array(
+        dict.values(state.findings) |> sort_by(fn(f) { f.id }),
+        encode_finding,
+      ),
+    ),
     #("events", json.array(list.reverse(state.events), encode_event)),
-    #("judgments", json.array(dict.values(state.judgments) |> sort_by(fn(j) { j.id }), encode_judgment)),
-    #("mcp_links", json.array(dict.values(state.mcp_links) |> sort_by(fn(l) { l.id }), encode_link)),
+    #(
+      "judgments",
+      json.array(
+        dict.values(state.judgments) |> sort_by(fn(j) { j.id }),
+        encode_judgment,
+      ),
+    ),
+    #(
+      "mcp_links",
+      json.array(
+        dict.values(state.mcp_links) |> sort_by(fn(l) { l.id }),
+        encode_link,
+      ),
+    ),
     #(
       "oauth",
       json.object([
-        #("clients", json.array(dict.values(state.oauth_clients), encode_client)),
-        #("grants", json.array(dict.values(state.oauth_grants) |> sort_by(fn(g) { g.id }), encode_grant)),
+        #(
+          "clients",
+          json.array(dict.values(state.oauth_clients), encode_client),
+        ),
+        #(
+          "grants",
+          json.array(
+            dict.values(state.oauth_grants) |> sort_by(fn(g) { g.id }),
+            encode_grant,
+          ),
+        ),
         #("tokens", json.array(dict.values(state.oauth_tokens), encode_token)),
       ]),
     ),
@@ -233,7 +281,11 @@ fn encode_token(t: OAuthToken) -> Json {
 
 // --- decoding ----------------------------------------------------------------
 
-fn nullable(name: String, inner: Decoder(a), next: fn(Option(a)) -> Decoder(b)) {
+fn nullable(
+  name: String,
+  inner: Decoder(a),
+  next: fn(Option(a)) -> Decoder(b),
+) {
   decode.optional_field(name, None, decode.optional(inner), next)
 }
 
@@ -301,7 +353,16 @@ fn next_ids_decoder() -> Decoder(NextIds) {
   use judgment <- decode.field("judgment", decode.int)
   use link <- decode.field("link", decode.int)
   use grant <- decode.field("grant", decode.int)
-  decode.success(NextIds(user:, agent:, item:, finding:, event:, judgment:, link:, grant:))
+  decode.success(NextIds(
+    user:,
+    agent:,
+    item:,
+    finding:,
+    event:,
+    judgment:,
+    link:,
+    grant:,
+  ))
 }
 
 fn user_decoder() -> Decoder(User) {
@@ -309,7 +370,11 @@ fn user_decoder() -> Decoder(User) {
   use email <- decode.field("email", decode.string)
   use handle <- decode.field("handle", decode.string)
   use notify_email <- decode.optional_field("notify_email", True, decode.bool)
-  use nb <- decode.optional_field("notify_browser_non_blocking", False, decode.bool)
+  use nb <- decode.optional_field(
+    "notify_browser_non_blocking",
+    False,
+    decode.bool,
+  )
   use created_at <- decode.field("created_at", decode.int)
   use last_login_at <- nullable("last_login_at", decode.int)
   decode.success(User(
@@ -329,7 +394,13 @@ fn session_decoder() -> Decoder(WebSession) {
   use created_at <- decode.field("created_at", decode.int)
   use expires_at <- decode.field("expires_at", decode.int)
   use user_agent <- decode.optional_field("user_agent", "", decode.string)
-  decode.success(WebSession(token_sha256:, user:, created_at:, expires_at:, user_agent:))
+  decode.success(WebSession(
+    token_sha256:,
+    user:,
+    created_at:,
+    expires_at:,
+    user_agent:,
+  ))
 }
 
 fn agent_decoder() -> Decoder(Agent) {
@@ -357,7 +428,10 @@ pub fn item_decoder() -> Decoder(Item) {
       |> decode.map(option.unwrap(_, [])),
     ]),
   )
-  use state <- decode.field("state", enum(model.state_from_string, model.Active))
+  use state <- decode.field(
+    "state",
+    enum(model.state_from_string, model.Active),
+  )
   use importance <- nullable("importance", number())
   use reviewed_at <- nullable("reviewed_at", decode.int)
   use stale_p <- nullable("stale_p", number())
@@ -642,7 +716,9 @@ pub fn check_references(state: State) -> Result(Nil, String) {
       })
     let r4 =
       check_all(dict.values(state.findings), fn(f) {
-        case check(dict.has_key(state.agents, f.agent), "finding agent", f.agent) {
+        case
+          check(dict.has_key(state.agents, f.agent), "finding agent", f.agent)
+        {
           Ok(_) ->
             case opt_item("finding item", f.item) {
               Ok(_) -> opt_item("finding related_item", f.related_item)

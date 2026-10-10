@@ -57,7 +57,11 @@ pub fn review_item(ctx: Ctx, item_id: Int) -> Nil {
         None -> Nil
         Some(req) -> {
           let request_text =
-            jev.request_json(ctx.config.decision_model.model, req.state, req.questions)
+            jev.request_json(
+              ctx.config.decision_model.model,
+              req.state,
+              req.questions,
+            )
             |> json.to_string
           let started = sys.now_ms()
           let result = ask(req.state, req.questions)
@@ -82,13 +86,19 @@ pub fn review_item(ctx: Ctx, item_id: Int) -> Nil {
                       None,
                     )
                   let still_current = case state.get_item(s, item_id) {
-                    Some(i) -> i.version == req.context.item.version && model.is_open(i)
+                    Some(i) ->
+                      i.version == req.context.item.version && model.is_open(i)
                     None -> False
                   }
                   let s = case still_current {
                     True -> {
                       let #(importance, findings) =
-                        review.interpret_write(req.context, resp.answers, thresholds, judgment)
+                        review.interpret_write(
+                          req.context,
+                          resp.answers,
+                          thresholds,
+                          judgment,
+                        )
                       let s =
                         state.set_review_result(
                           s,
@@ -155,9 +165,21 @@ pub fn review_with_deadline(ctx: Ctx, item_id: Int, wait_ms: Int) -> Bool {
 
 /// The deterministic part of a post: `too_many_open` (and resolve it when
 /// back within the guideline).
-pub fn check_open_counts(ctx: Ctx, s: model.State, agent_id: Int, now: Int) -> model.State {
+pub fn check_open_counts(
+  ctx: Ctx,
+  s: model.State,
+  agent_id: Int,
+  now: Int,
+) -> model.State {
   let r = ctx.config.review
-  case review.too_many_open(s, agent_id, r.open_tasks_guideline, r.open_decisions_guideline) {
+  case
+    review.too_many_open(
+      s,
+      agent_id,
+      r.open_tasks_guideline,
+      r.open_decisions_guideline,
+    )
+  {
     Some(f) -> state.add_finding(s, f, now, cooldown(ctx)).0
     None -> state.resolve_agent_findings(s, agent_id, model.TooManyOpen, now)
   }
@@ -170,7 +192,8 @@ pub fn sweep(ctx: Ctx) -> Nil {
   // deterministic checks
   let _ =
     store.update(ctx.store, fn(s, e, now) {
-      let #(s, added) = add_findings(s, review.untouched(s, r.untouched_days, now), now, cd)
+      let #(s, added) =
+        add_findings(s, review.untouched(s, r.untouched_days, now), now, cd)
       let agents_with_open =
         state.open_items(s) |> list.map(fn(i) { i.agent }) |> list.unique
       let before = dict.size(s.findings)
@@ -178,7 +201,13 @@ pub fn sweep(ctx: Ctx) -> Nil {
         list.fold(dict.keys(s.agents), s, fn(acc, agent_id) {
           case list.contains(agents_with_open, agent_id) {
             True -> check_open_counts(ctx, acc, agent_id, now)
-            False -> state.resolve_agent_findings(acc, agent_id, model.TooManyOpen, now)
+            False ->
+              state.resolve_agent_findings(
+                acc,
+                agent_id,
+                model.TooManyOpen,
+                now,
+              )
           }
         })
       case added > 0 || dict.size(s.findings) != before {
@@ -210,7 +239,10 @@ pub fn sweep(ctx: Ctx) -> Nil {
             let items = state.items_of(s, agent.id)
             let newest =
               list.fold(items, 0, fn(acc, i) { int.max(acc, i.updated_at) })
-            let swept = dict.get(e.swept, agent.id) |> option.from_result |> option.unwrap(0)
+            let swept =
+              dict.get(e.swept, agent.id)
+              |> option.from_result
+              |> option.unwrap(0)
             case newest > 0 && newest < now - idle_ms && swept < newest {
               True ->
                 review.sweep_request(s, agent.id, now) |> option.to_result(Nil)
@@ -220,7 +252,11 @@ pub fn sweep(ctx: Ctx) -> Nil {
         })
       list.each(requests, fn(req) {
         let request_text =
-          jev.request_json(ctx.config.decision_model.model, req.state, req.questions)
+          jev.request_json(
+            ctx.config.decision_model.model,
+            req.state,
+            req.questions,
+          )
           |> json.to_string
         let started = sys.now_ms()
         let result = ask(req.state, req.questions)
@@ -231,15 +267,42 @@ pub fn sweep(ctx: Ctx) -> Nil {
             case result {
               Ok(resp) -> {
                 let #(s, judgment) =
-                  state.add_judgment(s, now, "sweep", None, request_text, Some(resp.raw), latency, resp.input_tokens, resp.output_tokens, None)
+                  state.add_judgment(
+                    s,
+                    now,
+                    "sweep",
+                    None,
+                    request_text,
+                    Some(resp.raw),
+                    latency,
+                    resp.input_tokens,
+                    resp.output_tokens,
+                    None,
+                  )
                 let findings =
-                  review.interpret_sweep(req, resp.answers, r.thresholds, judgment)
+                  review.interpret_sweep(
+                    req,
+                    resp.answers,
+                    r.thresholds,
+                    judgment,
+                  )
                 let #(s, _) = add_findings(s, findings, now, cd)
                 store.Changed(s, e, [store.Publish], Nil)
               }
               Error(reason) -> {
                 let #(s, _) =
-                  state.add_judgment(s, now, "sweep", None, request_text, None, latency, 0, 0, Some(reason))
+                  state.add_judgment(
+                    s,
+                    now,
+                    "sweep",
+                    None,
+                    request_text,
+                    None,
+                    latency,
+                    0,
+                    0,
+                    Some(reason),
+                  )
                 store.Changed(s, e, [], Nil)
               }
             }
@@ -250,6 +313,10 @@ pub fn sweep(ctx: Ctx) -> Nil {
   }
 }
 
-fn mark_swept(e: ephemeral.Ephemeral, agent_id: Int, now: Int) -> ephemeral.Ephemeral {
+fn mark_swept(
+  e: ephemeral.Ephemeral,
+  agent_id: Int,
+  now: Int,
+) -> ephemeral.Ephemeral {
   ephemeral.Ephemeral(..e, swept: dict.insert(e.swept, agent_id, now))
 }

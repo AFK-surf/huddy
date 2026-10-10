@@ -59,7 +59,12 @@ pub fn require_user(
 }
 
 /// Create a session for `user` and set the cookie on `resp`.
-pub fn start(ctx: Ctx, req: Request, resp: Response, user: User) -> Result(Response, String) {
+pub fn start(
+  ctx: Ctx,
+  req: Request,
+  resp: Response,
+  user: User,
+) -> Result(Response, String) {
   let token = sys.random_token(32)
   let sha = sys.sha256_hex(token)
   let ttl = ctx.config.auth.session_ttl_days * 86_400_000

@@ -50,11 +50,16 @@ fn list_key(pairs: List(#(String, String)), name: String) -> String {
   }
 }
 
-fn login_form(ctx: Ctx, req: Request, message: option.Option(html.Node)) -> Response {
-  let return_to = session.safe_return_to(case query(req, "return_to") {
-    "" -> "/"
-    r -> r
-  })
+fn login_form(
+  ctx: Ctx,
+  req: Request,
+  message: option.Option(html.Node),
+) -> Response {
+  let return_to =
+    session.safe_return_to(case query(req, "return_to") {
+      "" -> "/"
+      r -> r
+    })
   layout.respond(
     200,
     layout.card_page(ctx, "Sign in", [
@@ -87,7 +92,11 @@ fn request_code(ctx: Ctx, req: Request) -> Response {
   let ip = session.client_ip(req)
   case sys.rate_limit("login-ip:" <> ip, 10, 3_600_000) {
     False ->
-      login_form(ctx, req, Some(layout.error("Too many attempts. Try again later.")))
+      login_form(
+        ctx,
+        req,
+        Some(layout.error("Too many attempts. Try again later.")),
+      )
     True -> {
       case config.email_allowed(ctx.config, email) {
         True -> send_code(ctx, email)
@@ -123,7 +132,10 @@ fn send_code(ctx: Ctx, email: String) -> Nil {
             )
           let _ = s
           store.EphemeralChanged(
-            Ephemeral(..e, login_codes: dict.insert(e.login_codes, email, entry)),
+            Ephemeral(
+              ..e,
+              login_codes: dict.insert(e.login_codes, email, entry),
+            ),
             True,
           )
         }
@@ -148,7 +160,11 @@ fn send_code(ctx: Ctx, email: String) -> Nil {
   }
 }
 
-fn verify_form(ctx: Ctx, req: Request, message: option.Option(html.Node)) -> Response {
+fn verify_form(
+  ctx: Ctx,
+  req: Request,
+  message: option.Option(html.Node),
+) -> Response {
   let email = query(req, "email")
   let return_to = session.safe_return_to(query(req, "return_to"))
   layout.respond(
@@ -214,7 +230,10 @@ fn verify(ctx: Ctx, req: Request) -> Response {
               case sys.secure_equal(entry.code_hmac, hmac) {
                 True ->
                   store.EphemeralChanged(
-                    Ephemeral(..e, login_codes: dict.delete(e.login_codes, email)),
+                    Ephemeral(
+                      ..e,
+                      login_codes: dict.delete(e.login_codes, email),
+                    ),
                     Valid,
                   )
                 False ->
@@ -234,7 +253,8 @@ fn verify(ctx: Ctx, req: Request) -> Response {
       }
     })
   let retry = fn(message) {
-    let req = request.set_query(req, [#("email", email), #("return_to", return_to)])
+    let req =
+      request.set_query(req, [#("email", email), #("return_to", return_to)])
     verify_form(ctx, req, Some(layout.error(message)))
   }
   case check, config.email_allowed(ctx.config, email) {

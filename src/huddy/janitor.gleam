@@ -118,7 +118,9 @@ pub fn email_decisions(ctx: Ctx) -> Nil {
         [] -> store.NoChange([])
         _ -> {
           let s =
-            list.fold(candidates, s, fn(acc, c) { state.mark_emailed(acc, { c.0 }.id, now) })
+            list.fold(candidates, s, fn(acc, c) {
+              state.mark_emailed(acc, { c.0 }.id, now)
+            })
           store.Changed(s, e, [], candidates)
         }
       }
@@ -127,7 +129,11 @@ pub fn email_decisions(ctx: Ctx) -> Nil {
     Ok(list) ->
       list.each(list, fn(c) {
         let #(item, email, label) = c
-        ctx.send_email(email, decision_subject(item, label), decision_body(ctx, item, label))
+        ctx.send_email(
+          email,
+          decision_subject(item, label),
+          decision_body(ctx, item, label),
+        )
       })
     Error(e) -> logging.log(logging.Error, "decision e-mails: " <> e)
   }

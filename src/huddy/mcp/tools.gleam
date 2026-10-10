@@ -30,7 +30,12 @@ pub type ToolResult {
   ToolResult(text: String, structured: Json, is_error: Bool)
 }
 
-pub const write_tools = ["huddy_set_goal", "huddy_post", "huddy_update", "huddy_inbox"]
+pub const write_tools = [
+  "huddy_set_goal",
+  "huddy_post",
+  "huddy_update",
+  "huddy_inbox",
+]
 
 pub fn instructions(ctx: Ctx) -> String {
   "You report to Huddy, the heads-up display of the "
@@ -51,7 +56,10 @@ fn prop(name: String, schema: List(#(String, Json))) -> #(String, Json) {
 }
 
 fn string_prop(name: String, description: String) -> #(String, Json) {
-  prop(name, [#("type", json.string("string")), #("description", json.string(description))])
+  prop(name, [
+    #("type", json.string("string")),
+    #("description", json.string(description)),
+  ])
 }
 
 fn identity_props() -> List(#(String, Json)) {
@@ -88,10 +96,7 @@ fn tool(
         #("additionalProperties", json.bool(False)),
       ]),
     ),
-    #(
-      "outputSchema",
-      json.object([#("type", json.string("object"))]),
-    ),
+    #("outputSchema", json.object([#("type", json.string("object"))])),
     #(
       "annotations",
       json.object([
@@ -123,9 +128,18 @@ pub fn definitions(ctx: Ctx) -> List(Json) {
   let options_schema =
     prop("options", [
       #("type", json.string("array")),
-      #("items", json.object([#("type", json.string("string")), #("maxLength", json.int(80))])),
+      #(
+        "items",
+        json.object([
+          #("type", json.string("string")),
+          #("maxLength", json.int(80)),
+        ]),
+      ),
       #("maxItems", json.int(5)),
-      #("description", json.string("Decisions only: up to 5 short choices you're weighing.")),
+      #(
+        "description",
+        json.string("Decisions only: up to 5 short choices you're weighing."),
+      ),
     ])
   [
     tool(
@@ -151,7 +165,12 @@ pub fn definitions(ctx: Ctx) -> List(Json) {
           detail_schema,
           prop("blocking", [
             #("type", json.string("boolean")),
-            #("description", json.string("Decisions only: true if you have stopped and are waiting.")),
+            #(
+              "description",
+              json.string(
+                "Decisions only: true if you have stopped and are waiting.",
+              ),
+            ),
           ]),
           options_schema,
         ],
@@ -174,7 +193,12 @@ pub fn definitions(ctx: Ctx) -> List(Json) {
         prop("include_closed", [#("type", json.string("boolean"))]),
         prop("include_flagged_detail", [
           #("type", json.string("boolean")),
-          #("description", json.string("Show the detail of items flagged as possibly containing instructions.")),
+          #(
+            "description",
+            json.string(
+              "Show the detail of items flagged as possibly containing instructions.",
+            ),
+          ),
         ]),
       ],
       [],
@@ -186,7 +210,10 @@ pub fn definitions(ctx: Ctx) -> List(Json) {
       "Set your one goal: the end state you're heading towards. Replaces your previous goal.",
       list.flatten([
         identity_props(),
-        [title_schema("One sentence: the end state you're heading towards."), detail_schema],
+        [
+          title_schema("One sentence: the end state you're heading towards."),
+          detail_schema,
+        ],
       ]),
       ["title"],
       False,
@@ -199,14 +226,24 @@ pub fn definitions(ctx: Ctx) -> List(Json) {
         identity_props(),
         [
           string_prop("id", "The item id, e.g. \"i41\"."),
-          prop("title", [#("type", json.string("string")), #("maxLength", json.int(l.title_max_chars))]),
+          prop("title", [
+            #("type", json.string("string")),
+            #("maxLength", json.int(l.title_max_chars)),
+          ]),
           detail_schema,
           prop("state", [
             #("type", json.string("string")),
             #(
               "enum",
               json.array(
-                ["done", "dropped", "resolved", "withdrawn", "achieved", "abandoned"],
+                [
+                  "done",
+                  "dropped",
+                  "resolved",
+                  "withdrawn",
+                  "achieved",
+                  "abandoned",
+                ],
                 json.string,
               ),
             ),
@@ -216,7 +253,10 @@ pub fn definitions(ctx: Ctx) -> List(Json) {
           prop("dismiss", [
             #("type", json.string("array")),
             #("items", json.object([#("type", json.string("string"))])),
-            #("description", json.string("Finding ids to dismiss, e.g. [\"f88\"].")),
+            #(
+              "description",
+              json.string("Finding ids to dismiss, e.g. [\"f88\"]."),
+            ),
           ]),
           string_prop("reason", "Why you dismiss the findings."),
         ],
@@ -232,28 +272,67 @@ pub fn definitions(ctx: Ctx) -> List(Json) {
 type Args =
   Dynamic
 
+/// A title: one line, inner whitespace collapsed.
+fn arg_title(args: Args) -> Option(String) {
+  arg_string(args, "title")
+  |> option.map(fn(t) {
+    t
+    |> string.replace("\r", " ")
+    |> string.replace("\n", " ")
+    |> string.replace("\t", " ")
+    |> string.split(" ")
+    |> list.filter(fn(w) { w != "" })
+    |> string.join(" ")
+  })
+}
+
 fn arg_string(args: Args, name: String) -> Option(String) {
-  decode.run(args, decode.optional_field(name, None, decode.optional(decode.string), decode.success))
+  decode.run(
+    args,
+    decode.optional_field(
+      name,
+      None,
+      decode.optional(decode.string),
+      decode.success,
+    ),
+  )
   |> result.unwrap(None)
   |> option.map(string.trim)
 }
 
 fn arg_bool(args: Args, name: String) -> Option(Bool) {
-  decode.run(args, decode.optional_field(name, None, decode.optional(decode.bool), decode.success))
+  decode.run(
+    args,
+    decode.optional_field(
+      name,
+      None,
+      decode.optional(decode.bool),
+      decode.success,
+    ),
+  )
   |> result.unwrap(None)
 }
 
 fn arg_strings(args: Args, name: String) -> Option(List(String)) {
   decode.run(
     args,
-    decode.optional_field(name, None, decode.optional(decode.list(decode.string)), decode.success),
+    decode.optional_field(
+      name,
+      None,
+      decode.optional(decode.list(decode.string)),
+      decode.success,
+    ),
   )
   |> result.unwrap(None)
   |> option.map(list.map(_, string.trim))
 }
 
 fn error(text: String) -> ToolResult {
-  ToolResult(text:, structured: json.object([#("error", json.string(text))]), is_error: True)
+  ToolResult(
+    text:,
+    structured: json.object([#("error", json.string(text))]),
+    is_error: True,
+  )
 }
 
 fn non_empty(o: Option(String)) -> Option(String) {
@@ -289,13 +368,23 @@ fn identity(
   }
 }
 
-fn validate_text(ctx: Ctx, title: Option(String), detail: Option(String), options: Option(List(String))) -> Result(Nil, String) {
+fn validate_text(
+  ctx: Ctx,
+  title: Option(String),
+  detail: Option(String),
+  options: Option(List(String)),
+) -> Result(Nil, String) {
   let l = ctx.config.limits
   use _ <- result.try(case title {
     Some("") -> Error("`title` must not be empty.")
     Some(t) ->
       case string.length(t) > l.title_max_chars {
-        True -> Error("`title` is longer than " <> int.to_string(l.title_max_chars) <> " characters.")
+        True ->
+          Error(
+            "`title` is longer than "
+            <> int.to_string(l.title_max_chars)
+            <> " characters.",
+          )
         False -> Ok(Nil)
       }
     None -> Ok(Nil)
@@ -303,15 +392,26 @@ fn validate_text(ctx: Ctx, title: Option(String), detail: Option(String), option
   use _ <- result.try(case detail {
     Some(d) ->
       case string.length(d) > l.detail_max_chars {
-        True -> Error("`detail` is longer than " <> int.to_string(l.detail_max_chars) <> " characters.")
+        True ->
+          Error(
+            "`detail` is longer than "
+            <> int.to_string(l.detail_max_chars)
+            <> " characters.",
+          )
         False -> Ok(Nil)
       }
     None -> Ok(Nil)
   })
   case options {
     Some(opts) ->
-      case list.length(opts) > 5 || list.any(opts, fn(o) { string.length(o) > 80 || o == "" }) {
-        True -> Error("`options`: at most 5 non-empty choices of up to 80 characters.")
+      case
+        list.length(opts) > 5
+        || list.any(opts, fn(o) { string.length(o) > 80 || o == "" })
+      {
+        True ->
+          Error(
+            "`options`: at most 5 non-empty choices of up to 80 characters.",
+          )
         False -> Ok(Nil)
       }
     None -> Ok(Nil)
@@ -351,14 +451,27 @@ fn write(
   case identity(principal, client_name, args) {
     Error(e) -> error(e)
     Ok(#(name, project)) -> {
-      let key = int.to_string(principal.user.id) <> "/" <> name <> "/" <> project
-      case sys.rate_limit("mcp-write:" <> key, ctx.config.limits.writes_per_agent_per_minute, 60_000) {
+      let key =
+        int.to_string(principal.user.id) <> "/" <> name <> "/" <> project
+      case
+        sys.rate_limit(
+          "mcp-write:" <> key,
+          ctx.config.limits.writes_per_agent_per_minute,
+          60_000,
+        )
+      {
         False -> error("Rate limited: slow down and try again in a minute.")
         True -> {
           let agent =
             store.update_lazy(ctx.store, fn(s, e, now) {
-              let #(s, a) = state.ensure_agent(s, principal.user.id, name, project, now)
-              store.Changed(s, e, [store.Publish], Agent(a.id, state.agent_label(s, a.id)))
+              let #(s, a) =
+                state.ensure_agent(s, principal.user.id, name, project, now)
+              store.Changed(
+                s,
+                e,
+                [store.Publish],
+                Agent(a.id, state.agent_label(s, a.id)),
+              )
             })
           let #(result, focus) = run(ctx, agent, args)
           with_inbox(ctx, agent, result, focus)
@@ -370,7 +483,12 @@ fn write(
 
 /// Attach undelivered findings: those about the item just written go under
 /// "Review", the rest under "Inbox". All become delivered.
-fn with_inbox(ctx: Ctx, agent: Agent, result: ToolResult, focus: Option(Int)) -> ToolResult {
+fn with_inbox(
+  ctx: Ctx,
+  agent: Agent,
+  result: ToolResult,
+  focus: Option(Int),
+) -> ToolResult {
   let findings =
     store.update_lazy(ctx.store, fn(s, e, now) {
       case state.take_inbox(s, agent.id, now) {
@@ -408,7 +526,11 @@ fn with_inbox(ctx: Ctx, agent: Agent, result: ToolResult, focus: Option(Int)) ->
         #("findings", json.array(list.append(review, rest), finding_json)),
       ])
   }
-  ToolResult(..result, text: result.text <> review_text <> inbox_text, structured:)
+  ToolResult(
+    ..result,
+    text: result.text <> review_text <> inbox_text,
+    structured:,
+  )
 }
 
 fn render_findings(findings: List(Finding)) -> String {
@@ -433,7 +555,10 @@ fn finding_json(f: Finding) -> Json {
     #("id", json.string(model.finding_ref(f.id))),
     #("kind", json.string(model.finding_kind_to_string(f.kind))),
     #("item", json.nullable(option.map(f.item, model.item_ref), json.string)),
-    #("related_item", json.nullable(option.map(f.related_item, model.item_ref), json.string)),
+    #(
+      "related_item",
+      json.nullable(option.map(f.related_item, model.item_ref), json.string),
+    ),
     #("message", json.string(f.message)),
     #("confidence", json.nullable(f.confidence, json.float)),
   ])
@@ -441,11 +566,17 @@ fn finding_json(f: Finding) -> Json {
 
 // --- write tools ---------------------------------------------------------------------
 
-fn create(ctx: Ctx, agent: Agent, new: state.NewItem) -> #(ToolResult, Option(Int)) {
+fn create(
+  ctx: Ctx,
+  agent: Agent,
+  new: state.NewItem,
+) -> #(ToolResult, Option(Int)) {
   let created =
     store.update(ctx.store, fn(s, e, now) {
       let had_goal =
-        list.any(state.open_items_of(s, agent.id), fn(i) { i.kind == model.Goal })
+        list.any(state.open_items_of(s, agent.id), fn(i) {
+          i.kind == model.Goal
+        })
       let #(s, item) = state.create_item(s, agent.id, new, now)
       let s = reviewer.check_open_counts(ctx, s, agent.id, now)
       let effects = case item.kind {
@@ -457,7 +588,8 @@ fn create(ctx: Ctx, agent: Agent, new: state.NewItem) -> #(ToolResult, Option(In
   case created {
     Error(e) -> #(error("Not stored: " <> e), None)
     Ok(#(item, had_goal)) -> {
-      let done = reviewer.review_with_deadline(ctx, item.id, ctx.config.review.wait_ms)
+      let done =
+        reviewer.review_with_deadline(ctx, item.id, ctx.config.review.wait_ms)
       let ref = model.item_ref(item.id)
       let text =
         "Stored "
@@ -476,7 +608,8 @@ fn create(ctx: Ctx, agent: Agent, new: state.NewItem) -> #(ToolResult, Option(In
         }
         <> case done {
           True -> ""
-          False -> " Review pending: findings, if any, arrive with your next Huddy call."
+          False ->
+            " Review pending: findings, if any, arrive with your next Huddy call."
         }
       #(
         ToolResult(
@@ -501,24 +634,34 @@ fn create(ctx: Ctx, agent: Agent, new: state.NewItem) -> #(ToolResult, Option(In
 }
 
 fn set_goal(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
-  let title = arg_string(args, "title")
+  let title = arg_title(args)
   let detail = arg_string(args, "detail")
   case title, validate_text(ctx, title, detail, None) {
     None, _ -> #(error("`title` is required."), None)
     _, Error(e) -> #(error(e), None)
     Some(t), Ok(_) ->
-      create(ctx, agent, state.NewItem(model.Goal, t, option.unwrap(detail, ""), False, []))
+      create(
+        ctx,
+        agent,
+        state.NewItem(model.Goal, t, option.unwrap(detail, ""), False, []),
+      )
   }
 }
 
 fn post(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
-  let title = arg_string(args, "title")
+  let title = arg_title(args)
   let detail = arg_string(args, "detail")
   let options = arg_strings(args, "options")
   let kind = arg_string(args, "kind") |> option.map(model.kind_from_string)
   case kind, title, validate_text(ctx, title, detail, options) {
-    Some(Ok(model.Goal)), _, _ -> #(error("Use huddy_set_goal for goals."), None)
-    None, _, _ | Some(Error(_)), _, _ -> #(error("`kind` must be \"task\" or \"decision\"."), None)
+    Some(Ok(model.Goal)), _, _ -> #(
+      error("Use huddy_set_goal for goals."),
+      None,
+    )
+    None, _, _ | Some(Error(_)), _, _ -> #(
+      error("`kind` must be \"task\" or \"decision\"."),
+      None,
+    )
     _, None, _ -> #(error("`title` is required."), None)
     _, _, Error(e) -> #(error(e), None)
     Some(Ok(k)), Some(t), Ok(_) ->
@@ -538,19 +681,31 @@ fn post(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
 
 fn update(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
   let id = arg_string(args, "id") |> option.map(model.parse_ref(_, "i"))
-  let title = non_empty(arg_string(args, "title"))
+  let title = non_empty(arg_title(args))
   let detail = arg_string(args, "detail")
   let options = arg_strings(args, "options")
-  let new_state = arg_string(args, "state") |> option.map(model.state_from_string)
+  let new_state =
+    arg_string(args, "state") |> option.map(model.state_from_string)
   let dismiss =
     arg_strings(args, "dismiss")
     |> option.unwrap([])
     |> list.map(model.parse_ref(_, "f"))
   let reason = option.unwrap(arg_string(args, "reason"), "")
-  case id, new_state, result.all(dismiss), validate_text(ctx, title, detail, options) {
-    None, _, _, _ | Some(Error(_)), _, _, _ -> #(error("`id` must be an item id like \"i41\"."), None)
+  case
+    id,
+    new_state,
+    result.all(dismiss),
+    validate_text(ctx, title, detail, options)
+  {
+    None, _, _, _ | Some(Error(_)), _, _, _ -> #(
+      error("`id` must be an item id like \"i41\"."),
+      None,
+    )
     _, Some(Error(_)), _, _ -> #(error("Unknown `state`."), None)
-    _, _, Error(_), _ -> #(error("`dismiss` must list finding ids like \"f88\"."), None)
+    _, _, Error(_), _ -> #(
+      error("`dismiss` must list finding ids like \"f88\"."),
+      None,
+    )
     _, _, _, Error(e) -> #(error(e), None)
     Some(Ok(item_id)), state_opt, Ok(dismiss_ids), Ok(_) -> {
       let edit =
@@ -587,8 +742,15 @@ fn update(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
                     Error(e2) -> store.NoChange(Error(e2))
                     Ok(#(s, out)) -> {
                       let s = reviewer.check_open_counts(ctx, s, agent.id, now)
-                      let effects = case out.item.kind, out.item.blocking, out.content_changed {
-                        model.Decision, True, True -> [store.Publish, store.NotifyDecision(item_id)]
+                      let effects = case
+                        out.item.kind,
+                        out.item.blocking,
+                        out.content_changed
+                      {
+                        model.Decision, True, True -> [
+                          store.Publish,
+                          store.NotifyDecision(item_id),
+                        ]
                         _, _, _ -> [store.Publish]
                       }
                       store.Changed(s, e, effects, Ok(Some(out)))
@@ -603,10 +765,20 @@ fn update(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
         Ok(out) -> {
           let ref = model.item_ref(item_id)
           let #(text, focus) = case out {
-            None -> #("Dismissed " <> int.to_string(list.length(dismiss_ids)) <> " finding(s).", None)
+            None -> #(
+              "Dismissed "
+                <> int.to_string(list.length(dismiss_ids))
+                <> " finding(s).",
+              None,
+            )
             Some(o) -> {
               let reviewed = case o.content_changed && model.is_open(o.item) {
-                True -> reviewer.review_with_deadline(ctx, item_id, ctx.config.review.wait_ms)
+                True ->
+                  reviewer.review_with_deadline(
+                    ctx,
+                    item_id,
+                    ctx.config.review.wait_ms,
+                  )
                 False -> True
               }
               #(
@@ -616,13 +788,16 @@ fn update(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
                   <> model.state_to_string(o.item.state)
                   <> ")."
                   <> case dismiss_ids {
-                    [] -> ""
-                    ids -> " Dismissed " <> int.to_string(list.length(ids)) <> " finding(s)."
-                  }
+                  [] -> ""
+                  ids ->
+                    " Dismissed "
+                    <> int.to_string(list.length(ids))
+                    <> " finding(s)."
+                }
                   <> case reviewed {
-                    True -> ""
-                    False -> " Review pending."
-                  },
+                  True -> ""
+                  False -> " Review pending."
+                },
                 Some(item_id),
               )
             }
@@ -634,7 +809,12 @@ fn update(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
                 #("id", json.string(ref)),
                 #(
                   "state",
-                  json.nullable(option.map(out, fn(o) { model.state_to_string(o.item.state) }), json.string),
+                  json.nullable(
+                    option.map(out, fn(o) {
+                      model.state_to_string(o.item.state)
+                    }),
+                    json.string,
+                  ),
                 ),
               ]),
               is_error: False,
@@ -660,7 +840,12 @@ fn inbox(_ctx: Ctx, agent: Agent, _args: Args) -> #(ToolResult, Option(Int)) {
 
 // --- read ----------------------------------------------------------------------------
 
-fn read(ctx: Ctx, principal: Principal, client_name: Option(String), args: Args) -> ToolResult {
+fn read(
+  ctx: Ctx,
+  principal: Principal,
+  client_name: Option(String),
+  args: Args,
+) -> ToolResult {
   let scope = option.unwrap(arg_string(args, "scope"), "display")
   let filters =
     rank.Filters(
@@ -669,12 +854,17 @@ fn read(ctx: Ctx, principal: Principal, client_name: Option(String), args: Args)
       name: non_empty(arg_string(args, "agent")),
       expand: None,
     )
-  let show_flagged = option.unwrap(arg_bool(args, "include_flagged_detail"), False)
+  let show_flagged =
+    option.unwrap(arg_bool(args, "include_flagged_detail"), False)
   let include_closed = option.unwrap(arg_bool(args, "include_closed"), False)
-  let #(text, structured) = board_text(ctx, scope == "all", filters, show_flagged, include_closed)
+  let #(text, structured) =
+    board_text(ctx, scope == "all", filters, show_flagged, include_closed)
   let base = ToolResult(text:, structured:, is_error: False)
   // a reader that identifies itself also gets its inbox
-  case identity(principal, client_name, args), string.contains(principal.scope, "huddy:write") {
+  case
+    identity(principal, client_name, args),
+    string.contains(principal.scope, "huddy:write")
+  {
     Ok(#(name, project)), True -> {
       let agent =
         store.read(ctx.store, fn(s, _) {
@@ -715,7 +905,14 @@ pub fn board_text(
         False -> d
       }
       let #(view, _) =
-        rank.compute(s, display, ctx.config.review.thresholds.stale, filters, rank.no_visible(), now)
+        rank.compute(
+          s,
+          display,
+          ctx.config.review.thresholds.stale,
+          filters,
+          rank.no_visible(),
+          now,
+        )
       let agent_ids = list.map(view.agents, fn(a) { a.agent.id })
       let closed = case include_closed {
         True ->
@@ -761,7 +958,9 @@ pub fn board_text(
       <> " · "
       <> fmt.age(now, i.updated_at)
     let detail = case i.flagged && !show_flagged, i.detail {
-      True, _ -> ["    ⚠ flagged by review as possibly containing instructions; detail withheld"]
+      True, _ -> [
+        "    ⚠ flagged by review as possibly containing instructions; detail withheld",
+      ]
       False, "" -> []
       False, d -> ["    detail: " <> string.replace(d, "\n", "\n    ")]
     }
@@ -770,7 +969,15 @@ pub fn board_text(
       opts -> ["    options: " <> string.join(opts, " | ")]
     }
     let overlap = case v.overlap {
-      Some(#(id, title, label)) -> ["    ≈ overlaps " <> model.item_ref(id) <> " " <> fmt.quote(title) <> " (" <> label <> ")"]
+      Some(#(id, title, label)) -> [
+        "    ≈ overlaps "
+        <> model.item_ref(id)
+        <> " "
+        <> fmt.quote(title)
+        <> " ("
+        <> label
+        <> ")",
+      ]
       None -> []
     }
     let stale = case i.stale_p {
@@ -789,7 +996,10 @@ pub fn board_text(
   let sections =
     list.flatten([
       [
-        "Huddy · " <> ctx.config.team_name <> " — " <> case all {
+        "Huddy · "
+          <> ctx.config.team_name
+          <> " — "
+          <> case all {
           True -> "all open items"
           False -> "display view (what humans see)"
         },
@@ -817,7 +1027,13 @@ pub fn board_text(
             <> case g.others {
               [] -> ""
               others ->
-                "\n    shared with: " <> string.join(list.map(others, fn(o) { o.agent_label <> " (" <> model.item_ref(o.item.id) <> ")" }), ", ")
+                "\n    shared with: "
+                <> string.join(
+                  list.map(others, fn(o) {
+                    o.agent_label <> " (" <> model.item_ref(o.item.id) <> ")"
+                  }),
+                  ", ",
+                )
             }
           })
       },
@@ -835,7 +1051,14 @@ pub fn board_text(
             ["", "RECENTLY CLOSED"],
             list.map(closed, fn(pair) {
               let #(i, label) = pair
-              "  " <> model.item_ref(i.id) <> " [" <> model.state_to_string(i.state) <> "] " <> fmt.quote(i.title) <> " — " <> label
+              "  "
+              <> model.item_ref(i.id)
+              <> " ["
+              <> model.state_to_string(i.state)
+              <> "] "
+              <> fmt.quote(i.title)
+              <> " — "
+              <> label
             }),
           ])
       },
@@ -846,19 +1069,22 @@ pub fn board_text(
       #("id", json.string(model.item_ref(i.id))),
       #("kind", json.string(model.kind_to_string(i.kind))),
       #("title", json.string(i.title)),
-      #(
-        "detail",
-        case i.flagged && !show_flagged {
-          True -> json.null()
-          False -> json.string(i.detail)
-        },
-      ),
+      #("detail", case i.flagged && !show_flagged {
+        True -> json.null()
+        False -> json.string(i.detail)
+      }),
       #("agent", json.string(v.agent_label)),
       #("state", json.string(model.state_to_string(i.state))),
       #("blocking", json.bool(i.blocking)),
       #("options", json.array(i.options, json.string)),
       #("seen_by", json.nullable(v.seen_by, json.string)),
-      #("overlaps", json.nullable(option.map(v.overlap, fn(o) { model.item_ref(o.0) }), json.string)),
+      #(
+        "overlaps",
+        json.nullable(
+          option.map(v.overlap, fn(o) { model.item_ref(o.0) }),
+          json.string,
+        ),
+      ),
       #("may_be_outdated", json.bool(option.is_some(i.stale_p))),
       #("flagged", json.bool(i.flagged)),
       #("updated_at", json.int(i.updated_at)),
@@ -866,26 +1092,41 @@ pub fn board_text(
   }
   let structured =
     json.object([
-      #("view", json.string(case all {
-        True -> "all"
-        False -> "display"
-      })),
+      #(
+        "view",
+        json.string(case all {
+          True -> "all"
+          False -> "display"
+        }),
+      ),
       #("decisions", json.array(decisions, item_json)),
-      #("goals", json.array(view.goals, fn(g) {
-        json.object([
-          #("goal", item_json(g.primary)),
-          #("shared_with", json.array(g.others, item_json)),
-        ])
-      })),
+      #(
+        "goals",
+        json.array(view.goals, fn(g) {
+          json.object([
+            #("goal", item_json(g.primary)),
+            #("shared_with", json.array(g.others, item_json)),
+          ])
+        }),
+      ),
       #("tasks", json.array(view.tasks, item_json)),
-      #("not_shown", json.object([
-        #("decisions", json.int(view.decisions_more)),
-        #("goals", json.int(view.goals_more)),
-        #("tasks", json.int(view.tasks_more)),
-      ])),
-      #("agents", json.array(view.agents, fn(a) {
-        json.object([#("agent", json.string(a.label)), #("away", json.bool(a.away))])
-      })),
+      #(
+        "not_shown",
+        json.object([
+          #("decisions", json.int(view.decisions_more)),
+          #("goals", json.int(view.goals_more)),
+          #("tasks", json.int(view.tasks_more)),
+        ]),
+      ),
+      #(
+        "agents",
+        json.array(view.agents, fn(a) {
+          json.object([
+            #("agent", json.string(a.label)),
+            #("away", json.bool(a.away)),
+          ])
+        }),
+      ),
     ])
   #(string.join(sections, "\n"), structured)
 }

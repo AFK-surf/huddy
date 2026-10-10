@@ -15,8 +15,8 @@ import gleam/result
 import gleam/string
 import huddy/config.{type Config}
 import huddy/ctx.{type Ctx, Ctx}
-import huddy/jev
 import huddy/janitor
+import huddy/jev
 import huddy/mailer
 import huddy/model
 import huddy/oauth/cimd
@@ -119,7 +119,10 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
     |> mist.bind(cfg.listen)
     |> mist.port(cfg.port)
     |> mist.after_start(fn(port, _, _) {
-      logging.log(logging.Info, "listening on " <> cfg.listen <> ":" <> int.to_string(port))
+      logging.log(
+        logging.Info,
+        "listening on " <> cfg.listen <> ":" <> int.to_string(port),
+      )
     })
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(

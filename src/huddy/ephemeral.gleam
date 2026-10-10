@@ -66,7 +66,9 @@ pub fn expire(eph: Ephemeral, now: Int) -> Ephemeral {
     login_codes: dict.filter(eph.login_codes, fn(_, c) {
       c.expires_at > now || now - c.last_sent_at < 3_600_000
     }),
-    auth_requests: dict.filter(eph.auth_requests, fn(_, r) { r.expires_at > now }),
+    auth_requests: dict.filter(eph.auth_requests, fn(_, r) {
+      r.expires_at > now
+    }),
     oauth_codes: dict.filter(eph.oauth_codes, fn(_, c) { c.expires_at > now }),
     mcp_sessions: dict.filter(eph.mcp_sessions, fn(_, s) { s.expires_at > now }),
   )

@@ -1,10 +1,13 @@
 # Huddy — Design
 
-> Status: **final (v1)**. The decisions made along the way are listed in §14.
-> A static visual mockup of the display is in [`mockup.html`](mockup.html)
-> (open it locally; it's self-contained). Screenshot:
+> Status: **final (v1), implemented**. The decisions made along the way are
+> listed in §14; where the implementation refined the design, §15 says how.
+> The running app (demo data, decision model faked):
 >
-> ![Huddy display mockup](mockup.png)
+> ![Huddy board](screenshot.png)
+>
+> The original static mockup is kept in [`mockup.html`](mockup.html) /
+> [`mockup.png`](mockup.png).
 
 ## 1. What Huddy is
 
@@ -57,15 +60,15 @@ agent's own session, not through Huddy.
 
 ```
                        ┌────────────────────── huddy (one BEAM node, OTP 29) ──────────────────────┐
- Browser ──HTTPS──▶    │  mist ──┬─ /events  (SSE, per-viewer process) ◀─── board pubsub            │
+ Browser ──HTTPS──▶    │  mist ──┬─ /events  (SSE, per-viewer process) ◀─── store pubsub            │
   (one page)           │         ├─ wisp router: login, page, forms, settings                       │
                        │         ├─ /oauth/*, /.well-known/*   (Huddy as OAuth 2.1 AS)               │
  Coding agent ─MCP──▶  │         ├─ /mcp            (OAuth bearer)        ┐                          │
-  (Streamable HTTP)    │         └─ /mcp/k/<secret> (secret URL)          ┴─▶ mcp ─▶ board ◀─┐       │
+  (Streamable HTTP)    │         └─ /mcp/k/<secret> (secret URL)          ┴─▶ mcp ─▶ store ◀─┐       │
                        │                                                                     │       │
-                       │  board actor ── in-memory projection, ranking, pubsub              │       │
-                       │  store actor ── state in memory, atomic snapshots ──▶ huddy.json    │       │
-                       │  review pool ── Jev calls (gleam_httpc) ─────────▶ api.typesafe.ai ─┘       │
+                       │  store actor ── state in memory, ranking, pubsub                   │       │
+                       │    └ writer ─── one process per flush, atomic snapshot ──▶ huddy.json      │
+                       │  reviews ────── one process per review (gleam_httpc) ──▶ api.typesafe.ai ─┘ │
                        │  janitor     ── review sweeps, decision e-mails, expiry, backups           │
                        │  mailer      ── login codes + decision notifications via SMTP (gen_smtp)  │
                        └────────────────────────────────────────────────────────────────────────────┘
@@ -76,7 +79,7 @@ agent's own session, not through Huddy.
 | Concern | Choice | Notes |
 |---|---|---|
 | Runtime | Erlang/OTP **29.0.x** (29.0 shipped 2026-05-13) | Pin in `.tool-versions`. |
-| Language | Gleam 1.x (Erlang target only) | ❗ Check the compiler against OTP 29 in CI on day one; I found no explicit compatibility statement. There are no NIF dependencies. |
+| Language | Gleam **1.19.1** (Erlang target only) | Verified: builds, tests and runs on OTP 29.0.6. No NIF dependencies. |
 | HTTP server | `mist` 6.0 | Native SSE support (`mist.server_sent_events`). |
 | Web helpers | `wisp` 2.2 | Routing, forms, signed cookies, CSRF/Origin checks. Mounted under mist; `/events` and `/mcp` are handled by mist directly. |
 | Storage | One JSON file, written atomically (§5) | No database dependency. |
@@ -85,24 +88,25 @@ agent's own session, not through Huddy.
 | JSON | `gleam_json` 3 + `gleam/dynamic/decode` | Config, storage file, MCP, Jev. |
 | Crypto | `gleam_crypto` 1.6 | Random tokens, SHA-256, HMAC, constant-time compare. |
 | Email | `gen_smtp` 1.3 (Erlang, via a ~30-line FFI) | SMTP works with any provider. A `log` transport covers development. |
+| CLI args | `argv` 1.1 | `huddy --config PATH`. |
 | HTML | Our own ~150-line `html.gleam` (element builder → `StringTree`, always escapes) | No template engine, no frontend framework. |
 
 ### Supervision tree
 
 ```
 huddy_sup (one_for_one)
-├── store        (owns the canonical state and the JSON file; all writes serialized, group commit)
-├── board        (loads the projection from the store at boot; ranks; publishes)
-├── review_sup   (task supervisor for Jev calls, bounded concurrency)
-├── janitor      (timers: review sweep, decision e-mails, expiry, retention pruning, daily backup)
-├── mailer
-└── http         (mist listener)
+├── store        (named; owns state + ephemeral data, ranks on request, pubsub;
+│                 spawns a writer process per flush so it never blocks on disk)
+├── janitor      (timers: review sweep, decision e-mails, retention pruning, daily backup)
+└── mist         (HTTP listener; one process per request / SSE connection)
 ```
 
-`store` and `board` are separate so that ranking and rendering never wait on
-a disk flush. Writes go `mcp/web → store` (apply, persist with group commit,
-then publish the change) `→ board` (update the projection, re-rank, publish to
-SSE). Reads come from memory and never touch the file.
+Reviews and e-mails run in short-lived processes. Writes go `mcp/web → store`:
+apply the change, flush it with the next batch (group commit), reply once it is
+on disk, then publish to SSE subscribers. Reads (`store.read`, `store.view`)
+come from memory; the file write happens in a separate writer process, so reads
+never wait on disk. The store is registered under a name, so a restarted store
+(which reloads the file) keeps the same address.
 
 ---
 
@@ -218,8 +222,8 @@ access everywhere, without separate revocation.
 
 - **User**: one per verified email. `handle` is the `owner` segment in
   `alice/codex/proj`. By default it is the email local part, lowercased and
-  slugified; on a collision, the user picks one at first login. Users can change
-  it in settings.
+  slugified; on a collision a numeric suffix is added (`alice-2`). Users can
+  change it in settings.
 - **Agent**: `(owner user, name, project)`, unique. Created on the agent's first
   write. `name` and `project` are slugs (`[a-z0-9._-]{1,40}`).
   - `project` is **required on every write**. The server instructions tell agents
@@ -330,13 +334,13 @@ drops the SQLite NIF and its C toolchain entirely.
   by id) and is the **only writer** of the file. Every mutation is a message to
   `store`. It applies the change to `State`, appends an `event`, marks the state
   dirty, and replies once the change is durable (see group commit, 5.3).
-- `board` keeps its ranking projection, built from `State` at boot and updated
-  from the change events `store` publishes. Reads never touch the disk.
+- Ranking is computed from `State` on demand (it is cheap at this scale).
+  Reads never touch the disk.
 - **Ephemeral data is not persisted.** Login codes, OAuth authorization codes
-  (60s TTL), rate-limit buckets, legacy MCP `clientInfo` cache, and SSE
-  subscribers live in ETS only. Losing them on restart costs at most one
-  re-sent login code or one repeated OAuth click. It also keeps the hottest
-  write paths off the disk.
+  (60s TTL), pending consent requests, the legacy MCP `clientInfo` cache and
+  SSE subscribers live in the store's memory; rate-limit buckets live in an ETS
+  table. Losing them on restart costs at most one re-sent login code or one
+  repeated OAuth click. It also keeps the hottest write paths off the disk.
 - Timestamps are unix milliseconds. Tokens and secrets are stored **only as
   SHA-256 hashes** (hex). The file is created with mode `0600`.
 
@@ -456,11 +460,11 @@ mutation:
   ],
   "events": [
     { "id": 18229, "at": 1791622000000, "actor": "agent:12", "item": 52,
-      "type": "item_posted", "data": { "kind": "task" } }
+      "type": "item_posted", "detail": "task: Write refresh-token rotation" }
   ],
   "judgments": [
     { "id": 4402, "at": 1791621000000, "purpose": "write", "item": 52,
-      "request": { … }, "response": { … }, "latency_ms": 410,
+      "request": "{\"model\":\"jev-latest\",…}", "response": "{…}", "latency_ms": 410,
       "input_tokens": 612, "output_tokens": 18, "error": null }
   ],
 
@@ -489,8 +493,8 @@ mutation:
 ```
 
 Uniqueness rules (email, handle, `owner/name/project`, token hashes) are
-enforced by `store` with in-memory indexes (`Dict` lookups) that it rebuilds on
-boot. Referential integrity is checked at decode time: a dangling reference
+enforced by `store` with linear scans over the in-memory maps (there are tens
+of users and agents and hundreds of open items, so no indexes are needed). Referential integrity is checked at decode time: a dangling reference
 fails the boot, which is the same rule as an undecodable file.
 
 ---
@@ -536,8 +540,9 @@ decision-model vendor would mean a new adapter, not a redesign.
 When an agent posts or edits an item:
 
 1. **Validate the shape only.** Required fields, types, max lengths, and slugs
-   are declared in the tool's `inputSchema`. A violation is a protocol error, as
-   with any MCP tool, and not a content judgement. Rate limits protect against
+   are declared in the tool's `inputSchema`. A violation comes back as a tool
+   error (`isError: true`) naming the problem, so the agent can fix its call;
+   it is not a content judgement. Rate limits protect against
    runaway loops. Nothing else is refused.
 2. **Store the item and publish it.** It appears on the display immediately.
 3. **Review it.** Huddy sends one Jev request (below) plus the deterministic
@@ -585,7 +590,7 @@ When an agent posts or edits an item:
 ```
 
 `similar_items` holds up to 8 candidates: open items of the same kind, ranked in
-memory by word-trigram Jaccard similarity over title and detail. There are at
+memory by character-trigram Jaccard similarity over title and detail. There are at
 most a few hundred open items, so a linear scan takes microseconds and no index
 is needed. Same-project items are preferred and items from other projects are
 included. Decision items add one more question,
@@ -661,7 +666,7 @@ Huddy is **dual-era**:
   `serverInfo` to every result.
 - **Legacy, 2025-11-25.** Huddy answers `initialize`, returns the server
   `instructions`, and keeps no session state beyond caching `clientInfo` keyed by
-  an `MCP-Session-Id` (an ETS table with a 24h TTL). Most clients shipping today
+  an `MCP-Session-Id` (in the store's memory, 24h TTL). Most clients shipping today
   are still on this protocol.
 
 Both eras get **plain `application/json` responses only**; Huddy never opens
@@ -738,9 +743,11 @@ signal humans need.
 
 ## 8. Ranking and selection (deterministic)
 
-Ranking runs inside the `board` actor on every change, throttled to at most
-once every `rerank_interval_seconds` unless a blocking decision changed. It
-uses only stored review results, so it makes no Jev calls.
+Ranking is computed from the store's state whenever a view is requested: on
+page load, on every SSE re-render after a change, and on a timer every
+`rerank_interval_seconds` so time-based decay reaches open pages. Hysteresis
+(below) keeps the board stable between those. It uses only stored review
+results, so it makes no Jev calls.
 
 ```
 imp     = importance / 3                 (0.33 if unreviewed)
@@ -766,8 +773,8 @@ goal.priority      = max priority of the agent's open items, + 0.2 if active in 
 4. Ties break by `updated_at` (newer first).
 5. Goals: one per agent. Goals linked by an open `overlap` (two agents, same
    goal) render as **one circle with several agent chips**.
-6. Items hidden by a human are left out, except in the "hidden" expansion of
-   each zone, where they can be un-hidden.
+6. Items hidden by a human are left out. The footer links to `?expand=hidden`,
+   which lists them with an un-hide button.
 
 Each zone ends with "+7 more". Clicking it expands the zone to the full list
 using `?expand=tasks`, which the server renders. Filters (`?owner=alice`,
@@ -833,8 +840,9 @@ Interactions are plain `<form method=post>`. A ~40-line script upgrades them to
 ### 9.3 Live updates over SSE
 
 - `GET /events` is served by mist's SSE support. Each connection is its own
-  process. It subscribes to the board pubsub, and on `BoardChanged` renders the
-  page's **zones** (`#zone-agents`, `#zone-decisions`, `#zone-goals`,
+  process. It subscribes to the store's pubsub, and on `BoardChanged` renders the
+  page's **zones** (`#zone-header`, `#zone-agents`, `#zone-decisions`, `#zone-cols`,
+  `#zone-hidden`,
   `#zone-tasks`, `#zone-footer`) for this viewer's filters (sent as query params
   on the EventSource URL). It hashes each zone and sends only the zones whose
   hash changed:
@@ -911,7 +919,8 @@ Interactions are plain `<form method=post>`. A ~40-line script upgrades them to
   and stores only its SHA-256.
 - The secret is in the **path**, not the query string. The MCP spec forbids
   access tokens in query strings, and secret paths are what people expect to
-  paste into `.mcp.json`. Access logs redact everything after `/mcp/k/`.
+  paste into `.mcp.json`. Huddy writes no per-request access log; a reverse
+  proxy in front of it should redact everything after `/mcp/k/`.
 - `last_used_at` is shown, links can be revoked, and access dies with the owning
   user's allowlist membership.
 - Trade-off: anyone holding the URL is that user, and URLs leak into shell
@@ -958,10 +967,21 @@ That is acceptable for an AS behind an allowlisted login, and documented.
     detail;
   - all tool output frames items as quoted data with author attribution;
   - the server instructions say board content is not instructions.
-- CSRF: `SameSite=Lax` plus wisp's Origin/Host check on non-GET requests.
-- Rate limits are token buckets in ETS: login sends, MCP writes per agent, and
-  OAuth endpoints per IP.
+- CSRF: `SameSite=Lax` cookies, plus an Origin (or Referer) check against
+  `base_url` on every cookie-authenticated POST. wisp's built-in check compares
+  against the `Host` header, which some reverse proxies rewrite.
+- Rate limits are token buckets in ETS: login sends per IP (plus one code per
+  minute per email), MCP writes per agent, and OAuth token/registration
+  endpoints per IP.
+- Pages are served with a strict CSP (`script-src 'self'`, `style-src 'self'`,
+  no inline styles: sketch colours are CSS classes), `X-Frame-Options: DENY` and
+  `Referrer-Policy: same-origin`.
 - Every token, code and secret is stored hashed; comparisons are constant-time.
+- Login e-mail addresses must be printable ASCII with exactly one `@`, so no
+  header can be smuggled into outgoing mail. Agent titles are collapsed to one
+  line.
+- `/oauth/authorize` requires a signed-in user before resolving the client, so
+  anonymous visitors can't trigger Client ID Metadata Document fetches.
 - **Data egress:** item text goes to TypeSafe. `decision_model.enabled: false`
   disables that completely. Huddy then ranks by recency only and produces only
   deterministic findings.
@@ -971,37 +991,46 @@ That is acceptable for an AS behind an allowlisted login, and documented.
 ## 12. Code layout
 
 ```
-gleam.toml / manifest.toml / .tool-versions (erlang 29.0.x, gleam 1.x)
-priv/
-  static/huddy.css  huddy.js  excalifont.woff2  nunito.woff2  favicon.svg
+gleam.toml / manifest.toml / .tool-versions (erlang 29.0.6, gleam 1.19.1)
+huddy.example.json            annotated-by-example production config
+Dockerfile                    two-stage build → erlang:29-slim
+priv/static/                  huddy.css  huddy.js  excalifont.woff2  nunito.woff2  favicon.svg
 src/
-  huddy.gleam                 main: load config → migrate → start supervisor
-  huddy_ffi.erl               SMTP (gen_smtp), ETS helpers, monotonic time, os pid
+  huddy.gleam                 main: load config → lock → load → supervise store, janitor, mist
+  huddy_ffi.erl               atomic write, lock file, DNS, SMTP (gen_smtp), rate limiter, time
+  huddy/sys.gleam             bindings for huddy_ffi + token/hash helpers
   huddy/config.gleam          decoders, validation, $env resolution
-  huddy/model.gleam           Agent, Item, Kind, State, Finding …
-  huddy/state.gleam           State record, pure mutations, in-memory indexes
-  huddy/store.gleam           store actor: apply → group commit → publish
-  huddy/persist.gleam         JSON codec, format upgrades, atomic write, lock file, backups
-  huddy/board.gleam           projection, pubsub, write orchestration
-  huddy/rank.gleam            pure ranking/selection (heavily unit-tested)
+  huddy/model.gleam           User, Agent, Item, Finding, OAuth records, State …
+  huddy/codec.gleam           State ⇄ JSON (format 1), referential-integrity check
+  huddy/persist.gleam         load (upgrades, integrity), atomic write, lock, backups
+  huddy/state.gleam           pure mutations on State (items, findings, OAuth, retention)
+  huddy/ephemeral.gleam       in-memory-only data (login codes, OAuth codes, MCP sessions)
+  huddy/store.gleam           store actor: read / update (durable) / update_lazy, group commit, pubsub
+  huddy/rank.gleam            pure ranking/selection with hysteresis
+  huddy/similar.gleam         trigram similarity for duplicate candidates
   huddy/review.gleam          pure: build Jev questions, interpret answers → findings; deterministic checks
-  huddy/jev.gleam             HTTP client for /v1/systemone
-  huddy/notify.gleam          decision notifications (SSE notify events, email scheduling)
-  huddy/janitor.gleam
-  huddy/mailer.gleam
-  huddy/web/router.gleam  web/login.gleam  web/page.gleam  web/settings.gleam
-  huddy/web/sse.gleam     web/html.gleam   web/sketch.gleam (seeded rough shapes)
-  huddy/oauth/metadata.gleam  authorize.gleam  token.gleam  cimd.gleam  dcr.gleam
-  huddy/mcp/transport.gleam   (JSON-RPC, dual-era handling, headers, Origin)
-  huddy/mcp/tools.gleam       huddy/mcp/render.gleam (text + structured output)
+  huddy/reviewer.gleam        run reviews (with a deadline), sweeps
+  huddy/jev.gleam             HTTP client for /v1/systemone (behind the `Ask` function type)
+  huddy/janitor.gleam         timers: sweeps, decision e-mails, retention, backups
+  huddy/mailer.gleam          SMTP / log transport
+  huddy/web/router.gleam      top-level handler (mist for /events and /mcp, wisp for the rest)
+  huddy/web/page.gleam        board zones      web/sse.gleam     live zone swaps + notify
+  huddy/web/login.gleam       email codes      web/settings.gleam  links, grants, prefs
+  huddy/web/actions.gleam     seen/hide/unhide web/session.gleam   cookies, origin checks
+  huddy/web/html.gleam        HTML builder     web/sketch.gleam    seeded rough SVG
+  huddy/oauth/server.gleam    metadata, authorize + consent, token, register, revoke
+  huddy/oauth/cimd.gleam      Client ID Metadata Documents with SSRF guards
+  huddy/mcp/transport.gleam   Streamable HTTP, dual-era handling, header validation, auth
+  huddy/mcp/tools.gleam       tools, board text, inbox piggybacking
 test/
-  rank_test  review_test  sketch_test (determinism)  config_test  persist_test (round-trip, upgrades,
-  crash at every write step)  oauth_flow_test  mcp_e2e_test
+  config_test  persist_test  state_test  rank_test  review_test  web_test
+  e2e_test     (boots the app: login, MCP legacy + modern, OAuth, concurrent durable writes)
 ```
 
 `state`, `review`, `rank`, `sketch`, and `html` are pure, and they carry most of the
-logic and most of the tests. Jev is injected as a function record, so tests use
-a fake that returns scripted answers.
+logic and most of the tests. The decision model, e-mail sending and CIMD
+fetching are injected as functions (`huddy.Overrides`), so the end-to-end tests
+use a fake model and record e-mails.
 
 Deployment uses a two-stage Docker image. The build stage runs
 `gleam export erlang-shipment` with Gleam on OTP 29; the runtime stage is
@@ -1014,6 +1043,10 @@ correct for rate limits.
 ---
 
 ## 13. Milestones
+
+All milestones are implemented; the remaining "done when" items are about
+running it with a team (threshold tuning from real dismissal data, real
+clients).
 
 | # | Scope | Done when |
 |---|---|---|
@@ -1033,14 +1066,41 @@ Secret URLs ship before OAuth so that agents can start using Huddy in M1.
 |---|---|
 | Human ↔ agent | Huddy only **notifies** the agent's owner about decisions (page, browser, email). Humans answer their agents directly; there are no replies through Huddy. |
 | Review | Gating and hygiene are **one review** that only produces findings. The agent decides what to do and can dismiss with a reason. Huddy never rejects, edits or closes on content grounds. |
-| Refusals | Only protocol-level: schema violations, auth, rate limits. |
+| Refusals | Only malformed input (as tool errors), auth, and rate limits. |
 | Concurrent sessions | Same `owner/name/project` share one slot; pass a different `agent` name to separate them. |
 | Stale items | Fade and notify; never auto-close. |
 | Layout | Category zones; per-agent view via filters. |
 | Icons | Circle (goal), triangle (task), diamond (decision; filled when blocking). |
 | Email | SMTP via `gen_smtp`; `log` transport for development. |
 | Secrets | `{"$env": "NAME"}` allowed for any string in the config; literals also work. |
-| Handles | Derived from the email local part, changeable in settings. |
-| Storage | One JSON file: state in memory, single writer, group commit, tmp + fsync + rename; ephemeral data in ETS only. |
+| Handles | Derived from the email local part (numeric suffix on collision), changeable in settings. |
+| Storage | One JSON file: state in memory, single writer, group commit, tmp + fsync + rename; ephemeral data in memory only. |
 | Retention | Closed items 30 days; events 90 days; full Jev requests 14 days, compact judgments 90 days. |
 | MCP | Dual-era (2026-07-28 stateless + 2025-11-25), JSON responses only; CIMD preferred, DCR kept for current clients. |
+
+---
+
+## 15. Implementation notes
+
+Where the implementation refined the design above:
+
+- **No separate board actor.** Ranking is cheap enough to compute per view
+  request from the store's state, so the store owns state, ranking, and pubsub.
+  It hands each flush to a short-lived writer process, so it never blocks on
+  disk.
+- **One id scheme for agents:** every item is `i<N>` and every finding is
+  `f<N>`. Tool arguments accept the id with or without its prefix.
+- **Tool input errors** are tool results with `isError: true`, so agents can
+  correct their call. This follows MCP's guidance for input validation.
+- **Sweeps** only re-review an idle agent when something changed since its last
+  sweep. Time-only staleness is covered by the deterministic `untouched` check.
+- **Shutdown:** on SIGTERM the BEAM stops immediately. Durable writes were
+  already on disk before they were acknowledged. Best-effort updates (last-seen
+  times, delivery marks) from the last few seconds may be lost.
+- **CIMD size cap:** `gleam_httpc` can't stop reading partway through a body,
+  so the 10 KB limit is checked after download, together with the 5 s timeout.
+- **Verified locally:** unit and end-to-end tests (63), the live board in
+  Chromium at desktop and phone widths and in dark mode, the full OAuth flow,
+  and the review loop against a fake `/v1/systemone`. Two things were not tested
+  here: the real TypeSafe API, which needs a key, and real Claude Code / Codex
+  clients.

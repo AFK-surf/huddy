@@ -85,7 +85,9 @@ pub fn decode_file(bits: BitArray, path: String) -> Result(State, String) {
   )
   use _ <- result.try(
     codec.check_references(state)
-    |> result.map_error(fn(e) { "integrity check failed for " <> path <> ": " <> e }),
+    |> result.map_error(fn(e) {
+      "integrity check failed for " <> path <> ": " <> e
+    }),
   )
   Ok(state)
 }
@@ -108,7 +110,6 @@ fn upgrade(raw: Dynamic, version: Int) -> Result(Dynamic, String) {
   }
 }
 
-
 fn describe(error: json.DecodeError) -> String {
   case error {
     json.UnexpectedEndOfInput -> "unexpected end of input (truncated file?)"
@@ -119,7 +120,11 @@ fn describe(error: json.DecodeError) -> String {
       |> list.take(5)
       |> list.map(fn(e) {
         let decode.DecodeError(expected:, found:, path:) = e
-        string.join(path, ".") <> ": expected " <> expected <> ", found " <> found
+        string.join(path, ".")
+        <> ": expected "
+        <> expected
+        <> ", found "
+        <> found
       })
       |> string.join("; ")
   }

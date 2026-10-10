@@ -1,7 +1,6 @@
 name = "huddy"
 version = "0.1.0"
 description = "A heads-up display for a team's coding agents"
-licences = ["Apache-2.0"]
 target = "erlang"
 
 [dependencies]

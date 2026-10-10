@@ -30,3 +30,11 @@ pub fn clip(text: String, n: Int) -> String {
     False -> text
   }
 }
+
+/// "just now", "5m ago", "3h ago".
+pub fn ago(now: Int, then: Int) -> String {
+  case age(now, then) {
+    "just now" -> "just now"
+    a -> a <> " ago"
+  }
+}

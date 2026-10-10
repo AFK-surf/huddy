@@ -27,7 +27,8 @@ pub fn seed(text: String) -> Rng {
     |> string.to_utf_codepoints
     |> list.fold(2_166_136_261, fn(h, cp) {
       int.bitwise_and(
-        int.bitwise_exclusive_or(h, string.utf_codepoint_to_int(cp)) * 16_777_619,
+        int.bitwise_exclusive_or(h, string.utf_codepoint_to_int(cp))
+          * 16_777_619,
         mask,
       )
     })
@@ -39,9 +40,17 @@ pub fn seed(text: String) -> Rng {
 
 fn next(rng: Rng) -> #(Float, Rng) {
   let Rng(s) = rng
-  let s = int.bitwise_and(int.bitwise_exclusive_or(s, int.bitwise_shift_left(s, 13)), mask)
+  let s =
+    int.bitwise_and(
+      int.bitwise_exclusive_or(s, int.bitwise_shift_left(s, 13)),
+      mask,
+    )
   let s = int.bitwise_exclusive_or(s, int.bitwise_shift_right(s, 17))
-  let s = int.bitwise_and(int.bitwise_exclusive_or(s, int.bitwise_shift_left(s, 5)), mask)
+  let s =
+    int.bitwise_and(
+      int.bitwise_exclusive_or(s, int.bitwise_shift_left(s, 5)),
+      mask,
+    )
   #(int.to_float(s) /. 4_294_967_296.0, Rng(s))
 }
 
@@ -59,7 +68,14 @@ fn f(x: Float) -> String {
 // --- primitives -------------------------------------------------------------------
 
 /// A rough line: two quadratic strokes with jitter.
-pub fn line(rng: Rng, x1: Float, y1: Float, x2: Float, y2: Float, k: Float) -> #(String, Rng) {
+pub fn line(
+  rng: Rng,
+  x1: Float,
+  y1: Float,
+  x2: Float,
+  y2: Float,
+  k: Float,
+) -> #(String, Rng) {
   let dx = x2 -. x1
   let dy = y2 -. y1
   let len = case float.square_root(dx *. dx +. dy *. dy) {
@@ -99,7 +115,11 @@ pub fn line(rng: Rng, x1: Float, y1: Float, x2: Float, y2: Float, k: Float) -> #
   #(a <> b, rng)
 }
 
-pub fn polygon(rng: Rng, points: List(#(Float, Float)), k: Float) -> #(String, Rng) {
+pub fn polygon(
+  rng: Rng,
+  points: List(#(Float, Float)),
+  k: Float,
+) -> #(String, Rng) {
   let closed = case points {
     [first, ..] -> list.append(points, [first])
     [] -> []
@@ -130,7 +150,14 @@ fn erl_cos(x: Float) -> Float
 fn erl_sin(x: Float) -> Float
 
 /// A rough ellipse: two overshooting passes, smoothed with Catmull-Rom.
-pub fn ellipse(rng: Rng, cx: Float, cy: Float, rx: Float, ry: Float, k: Float) -> #(String, Rng) {
+pub fn ellipse(
+  rng: Rng,
+  cx: Float,
+  cy: Float,
+  rx: Float,
+  ry: Float,
+  k: Float,
+) -> #(String, Rng) {
   let pass = fn(rng) {
     let n = 14
     let #(s, rng) = next(rng)
@@ -225,7 +252,14 @@ fn clip_id(rng_seed: String) -> String {
   "c" <> int.to_base36(n)
 }
 
-fn filled(seed_text: String, rng: Rng, outline: String, w: Float, h: Float, color: String) -> #(String, Rng) {
+fn filled(
+  seed_text: String,
+  rng: Rng,
+  outline: String,
+  w: Float,
+  h: Float,
+  color: String,
+) -> #(String, Rng) {
   let id = clip_id(seed_text)
   let #(lines, rng) = hachure(rng, w, h, 7.0)
   #(
@@ -234,7 +268,12 @@ fn filled(seed_text: String, rng: Rng, outline: String, w: Float, h: Float, colo
       <> "\"><path d=\""
       <> outline
       <> "\"/></clipPath>"
-      <> path(lines, color, 1.1, " clip-path=\"url(#" <> id <> ")\" opacity=\"0.9\""),
+      <> path(
+      lines,
+      color,
+      1.1,
+      " clip-path=\"url(#" <> id <> ")\" opacity=\"0.9\"",
+    ),
     rng,
   )
 }
@@ -265,9 +304,23 @@ pub fn frame(
       let rx = wf /. 2.0 -. 3.0
       let ry = hf /. 2.0 -. 3.0
       let outline =
-        "M" <> f(cx -. rx) <> " " <> f(cy) <> "a" <> f(rx) <> " " <> f(ry)
-        <> " 0 1 0 " <> f(rx *. 2.0) <> " 0a" <> f(rx) <> " " <> f(ry) <> " 0 1 0 "
-        <> f(0.0 -. rx *. 2.0) <> " 0"
+        "M"
+        <> f(cx -. rx)
+        <> " "
+        <> f(cy)
+        <> "a"
+        <> f(rx)
+        <> " "
+        <> f(ry)
+        <> " 0 1 0 "
+        <> f(rx *. 2.0)
+        <> " 0a"
+        <> f(rx)
+        <> " "
+        <> f(ry)
+        <> " 0 1 0 "
+        <> f(0.0 -. rx *. 2.0)
+        <> " 0"
       let #(fill_svg, rng) = case fill {
         Some(color) -> filled(seed_text, rng, outline, wf, hf, color)
         None -> #("", rng)
@@ -281,7 +334,17 @@ pub fn frame(
       let x1 = wf -. 5.0
       let y1 = hf -. 5.0
       let outline =
-        "M" <> f(x0) <> " " <> f(y0) <> "H" <> f(x1) <> "V" <> f(y1) <> "H" <> f(x0) <> "Z"
+        "M"
+        <> f(x0)
+        <> " "
+        <> f(y0)
+        <> "H"
+        <> f(x1)
+        <> "V"
+        <> f(y1)
+        <> "H"
+        <> f(x0)
+        <> "Z"
       let #(fill_svg, rng) = case fill {
         Some(color) -> filled(seed_text, rng, outline, wf, hf, color)
         None -> #("", rng)
@@ -290,7 +353,8 @@ pub fn frame(
         True -> 0.6
         False -> 1.0
       }
-      let #(d, rng) = polygon(rng, [#(x0, y0), #(x1, y0), #(x1, y1), #(x0, y1)], k)
+      let #(d, rng) =
+        polygon(rng, [#(x0, y0), #(x1, y0), #(x1, y1), #(x0, y1)], k)
       let width = case small {
         True -> 1.3
         False -> 1.7
@@ -324,16 +388,46 @@ pub fn icon(kind: Icon, seed_text: String) -> String {
       let c = size /. 2.0
       let r = size /. 2.0 -. m
       let outline =
-        "M" <> f(c -. r) <> " " <> f(c) <> "a" <> f(r) <> " " <> f(r) <> " 0 1 0 "
-        <> f(r *. 2.0) <> " 0a" <> f(r) <> " " <> f(r) <> " 0 1 0 " <> f(0.0 -. r *. 2.0) <> " 0"
-      let #(fill_svg, rng) = filled(seed_text, rng, outline, size, size, "goal-bg")
+        "M"
+        <> f(c -. r)
+        <> " "
+        <> f(c)
+        <> "a"
+        <> f(r)
+        <> " "
+        <> f(r)
+        <> " 0 1 0 "
+        <> f(r *. 2.0)
+        <> " 0a"
+        <> f(r)
+        <> " "
+        <> f(r)
+        <> " 0 1 0 "
+        <> f(0.0 -. r *. 2.0)
+        <> " 0"
+      let #(fill_svg, rng) =
+        filled(seed_text, rng, outline, size, size, "goal-bg")
       let #(d, rng) = ellipse(rng, c, c, r, r, 0.8)
       #(fill_svg <> path(d, "goal", 1.8, ""), rng)
     }
     TaskIcon -> {
       let pts = [#(size /. 2.0, m), #(z, z), #(m, z)]
-      let outline = "M" <> f(size /. 2.0) <> " " <> f(m) <> "L" <> f(z) <> " " <> f(z) <> "L" <> f(m) <> " " <> f(z) <> "Z"
-      let #(fill_svg, rng) = filled(seed_text, rng, outline, size, size, "task-bg")
+      let outline =
+        "M"
+        <> f(size /. 2.0)
+        <> " "
+        <> f(m)
+        <> "L"
+        <> f(z)
+        <> " "
+        <> f(z)
+        <> "L"
+        <> f(m)
+        <> " "
+        <> f(z)
+        <> "Z"
+      let #(fill_svg, rng) =
+        filled(seed_text, rng, outline, size, size, "task-bg")
       let #(d, rng) = polygon(rng, pts, 0.6)
       #(fill_svg <> path(d, "task", 1.8, ""), rng)
     }
@@ -342,8 +436,22 @@ pub fn icon(kind: Icon, seed_text: String) -> String {
       let pts = [#(c, m -. 1.0), #(z +. 1.0, c), #(c, z +. 1.0), #(m -. 1.0, c)]
       let solid = case blocking {
         True ->
-          "<path d=\"M" <> f(c) <> " " <> f(m -. 1.0) <> "L" <> f(z +. 1.0) <> " " <> f(c)
-          <> "L" <> f(c) <> " " <> f(z +. 1.0) <> "L" <> f(m -. 1.0) <> " " <> f(c)
+          "<path d=\"M"
+          <> f(c)
+          <> " "
+          <> f(m -. 1.0)
+          <> "L"
+          <> f(z +. 1.0)
+          <> " "
+          <> f(c)
+          <> "L"
+          <> f(c)
+          <> " "
+          <> f(z +. 1.0)
+          <> "L"
+          <> f(m -. 1.0)
+          <> " "
+          <> f(c)
           <> "Z\" class=\"f-dec\" opacity=\"0.85\"/>"
         False -> ""
       }

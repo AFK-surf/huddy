@@ -69,7 +69,7 @@ fn item_brief(s: State, item: Item, now: Int) -> Json {
     #("agent", json.string(state.agent_label(s, item.agent))),
     #("title", json.string(item.title)),
     #("state", json.string(model.state_to_string(item.state))),
-    #("updated", json.string(fmt.age(now, item.updated_at) <> " ago")),
+    #("updated", json.string(fmt.ago(now, item.updated_at))),
   ])
 }
 
@@ -266,7 +266,17 @@ pub fn interpret_write(
           <> ". "
           <> kind_explanation(declared)
       }
-      [finding(item, item.agent, model.WrongKind, confidence, None, message, judgment)]
+      [
+        finding(
+          item,
+          item.agent,
+          model.WrongKind,
+          confidence,
+          None,
+          message,
+          judgment,
+        ),
+      ]
     }
     _ -> []
   }
@@ -331,7 +341,12 @@ pub fn interpret_write(
             model.Overlap,
             confidence,
             Some(other.id),
-            r <> " looks like another agent's " <> ref(other) <> " " <> fmt.quote(other.title) <> ".",
+            r
+              <> " looks like another agent's "
+              <> ref(other)
+              <> " "
+              <> fmt.quote(other.title)
+              <> ".",
             judgment,
           ),
           finding(
@@ -431,7 +446,11 @@ pub type SweepRequest {
 
 /// One request per idle agent: staleness of each open task/decision, given
 /// the agent's recent items (including closed ones).
-pub fn sweep_request(s: State, agent_id: Int, now: Int) -> Option(SweepRequest) {
+pub fn sweep_request(
+  s: State,
+  agent_id: Int,
+  now: Int,
+) -> Option(SweepRequest) {
   let open =
     state.open_items_of(s, agent_id)
     |> list.filter(fn(i) { i.kind != model.Goal })

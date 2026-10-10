@@ -33,7 +33,12 @@ import mist
 
 pub const modern_version = "2026-07-28"
 
-pub const legacy_versions = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+pub const legacy_versions = [
+  "2025-11-25",
+  "2025-06-18",
+  "2025-03-26",
+  "2024-11-05",
+]
 
 const meta_version = "io.modelcontextprotocol/protocolVersion"
 
@@ -62,7 +67,11 @@ fn id_json(id: Id) -> Json {
   }
 }
 
-fn respond(status: Int, body: Json, headers: List(#(String, String))) -> Response(mist.ResponseData) {
+fn respond(
+  status: Int,
+  body: Json,
+  headers: List(#(String, String)),
+) -> Response(mist.ResponseData) {
   list.fold(
     headers,
     response.new(status)
@@ -73,8 +82,13 @@ fn respond(status: Int, body: Json, headers: List(#(String, String))) -> Respons
   |> response.set_body(mist.Bytes(bytes_tree.from_string(json.to_string(body))))
 }
 
-fn empty(status: Int, headers: List(#(String, String))) -> Response(mist.ResponseData) {
-  list.fold(headers, response.new(status), fn(r, h) { response.set_header(r, h.0, h.1) })
+fn empty(
+  status: Int,
+  headers: List(#(String, String)),
+) -> Response(mist.ResponseData) {
+  list.fold(headers, response.new(status), fn(r, h) {
+    response.set_header(r, h.0, h.1)
+  })
   |> response.set_body(mist.Bytes(bytes_tree.new()))
 }
 
@@ -84,13 +98,15 @@ fn rpc_error(id: Id, code: Int, message: String, data: Option(Json)) -> Json {
     #("id", id_json(id)),
     #(
       "error",
-      json.object(list.flatten([
-        [#("code", json.int(code)), #("message", json.string(message))],
-        case data {
-          Some(d) -> [#("data", d)]
-          None -> []
-        },
-      ])),
+      json.object(
+        list.flatten([
+          [#("code", json.int(code)), #("message", json.string(message))],
+          case data {
+            Some(d) -> [#("data", d)]
+            None -> []
+          },
+        ]),
+      ),
     ),
   ])
 }
@@ -137,14 +153,19 @@ fn decode_header_value(value: String) -> String {
   }
 }
 
-pub fn handle(ctx: Ctx, req: Request(mist.Connection), auth: Auth) -> Response(mist.ResponseData) {
+pub fn handle(
+  ctx: Ctx,
+  req: Request(mist.Connection),
+  auth: Auth,
+) -> Response(mist.ResponseData) {
   // DNS-rebinding protection: a present Origin must be our own.
   let origin_ok = case header(req, "origin") {
     None -> True
     Some(o) -> config.origin_of(o) == config.origin_of(ctx.config.base_url)
   }
   case origin_ok, req.method {
-    False, _ -> respond(403, rpc_error(NoId, -32_600, "Forbidden origin", None), [])
+    False, _ ->
+      respond(403, rpc_error(NoId, -32_600, "Forbidden origin", None), [])
     True, http.Post -> post(ctx, req, auth)
     True, http.Options -> empty(204, [#("allow", "POST")])
     True, _ -> empty(405, [#("allow", "POST")])
@@ -161,14 +182,20 @@ fn challenge(ctx: Ctx, extra: String) -> #(String, String) {
   )
 }
 
-fn authenticate(ctx: Ctx, req: Request(a), auth: Auth) -> Result(Principal, Response(mist.ResponseData)) {
+fn authenticate(
+  ctx: Ctx,
+  req: Request(a),
+  auth: Auth,
+) -> Result(Principal, Response(mist.ResponseData)) {
   case auth {
     Secret(secret) -> {
       let sha = sys.sha256_hex(secret)
       let found =
         store.read(ctx.store, fn(s, _) {
           state.link_by_secret(s, sha)
-          |> option.then(fn(l) { state.user(s, l.user) |> option.map(fn(u) { #(l, u) }) })
+          |> option.then(fn(l) {
+            state.user(s, l.user) |> option.map(fn(u) { #(l, u) })
+          })
         })
       case ctx.config.mcp.secret_urls, found {
         True, Some(#(link, user)) ->
@@ -192,20 +219,48 @@ fn authenticate(ctx: Ctx, req: Request(a), auth: Auth) -> Result(Principal, Resp
               case string.lowercase(scheme) == "bearer" {
                 True ->
                   case oauth.authenticate(ctx, string.trim(token)) {
-                    Some(#(user, scope, _)) -> Ok(Principal(user:, scope:, link: None))
+                    Some(#(user, scope, _)) ->
+                      Ok(Principal(user:, scope:, link: None))
                     None ->
-                      Error(respond(
-                        401,
-                        rpc_error(NoId, -32_001, "invalid or expired token", None),
-                        [challenge(ctx, ", error=\"invalid_token\"")],
-                      ))
+                      Error(
+                        respond(
+                          401,
+                          rpc_error(
+                            NoId,
+                            -32_001,
+                            "invalid or expired token",
+                            None,
+                          ),
+                          [challenge(ctx, ", error=\"invalid_token\"")],
+                        ),
+                      )
                   }
-                False -> Error(respond(401, rpc_error(NoId, -32_001, "bearer token required", None), [challenge(ctx, "")]))
+                False ->
+                  Error(
+                    respond(
+                      401,
+                      rpc_error(NoId, -32_001, "bearer token required", None),
+                      [challenge(ctx, "")],
+                    ),
+                  )
               }
-            Error(_) -> Error(respond(401, rpc_error(NoId, -32_001, "bearer token required", None), [challenge(ctx, "")]))
+            Error(_) ->
+              Error(
+                respond(
+                  401,
+                  rpc_error(NoId, -32_001, "bearer token required", None),
+                  [challenge(ctx, "")],
+                ),
+              )
           }
         None ->
-          Error(respond(401, rpc_error(NoId, -32_001, "authorization required", None), [challenge(ctx, "")]))
+          Error(
+            respond(
+              401,
+              rpc_error(NoId, -32_001, "authorization required", None),
+              [challenge(ctx, "")],
+            ),
+          )
       }
   }
 }
@@ -220,7 +275,11 @@ fn parse(body: BitArray) -> Result(Rpc, Nil) {
       ]),
     )
     use method <- decode.field("method", decode.string)
-    use params <- decode.optional_field("params", dynamic.properties([]), decode.dynamic)
+    use params <- decode.optional_field(
+      "params",
+      dynamic.properties([]),
+      decode.dynamic,
+    )
     decode.success(Rpc(id:, method:, params:))
   }
   json.parse_bits(body, decoder) |> result.replace_error(Nil)
@@ -240,12 +299,31 @@ fn param_string(params: Dynamic, key: String) -> Option(String) {
   decode.run(params, decode.at([key], decode.string)) |> option.from_result
 }
 
-fn post(ctx: Ctx, req: Request(mist.Connection), auth: Auth) -> Response(mist.ResponseData) {
+fn post(
+  ctx: Ctx,
+  req: Request(mist.Connection),
+  auth: Auth,
+) -> Response(mist.ResponseData) {
   case mist.read_body(req, 1_048_576) {
-    Error(_) -> respond(413, rpc_error(NoId, -32_600, "request body too large or unreadable", None), [])
+    Error(_) ->
+      respond(
+        413,
+        rpc_error(NoId, -32_600, "request body too large or unreadable", None),
+        [],
+      )
     Ok(req) ->
       case parse(req.body) {
-        Error(_) -> respond(400, rpc_error(NoId, -32_700, "parse error: expected one JSON-RPC message", None), [])
+        Error(_) ->
+          respond(
+            400,
+            rpc_error(
+              NoId,
+              -32_700,
+              "parse error: expected one JSON-RPC message",
+              None,
+            ),
+            [],
+          )
         Ok(rpc) ->
           case authenticate(ctx, req, auth) {
             Error(resp) -> resp
@@ -263,9 +341,19 @@ fn post(ctx: Ctx, req: Request(mist.Connection), auth: Auth) -> Response(mist.Re
 
 // --- modern ---------------------------------------------------------------------
 
-fn modern(ctx: Ctx, req: Request(a), principal: Principal, rpc: Rpc, version: String) -> Response(mist.ResponseData) {
+fn modern(
+  ctx: Ctx,
+  req: Request(a),
+  principal: Principal,
+  rpc: Rpc,
+  version: String,
+) -> Response(mist.ResponseData) {
   let mismatch = fn(message) {
-    respond(400, rpc_error(rpc.id, -32_020, "Header mismatch: " <> message, None), [])
+    respond(
+      400,
+      rpc_error(rpc.id, -32_020, "Header mismatch: " <> message, None),
+      [],
+    )
   }
   case version == modern_version {
     False ->
@@ -275,29 +363,53 @@ fn modern(ctx: Ctx, req: Request(a), principal: Principal, rpc: Rpc, version: St
           rpc.id,
           -32_022,
           "Unsupported protocol version",
-          Some(json.object([
-            #("supported", json.array([modern_version, ..legacy_versions], json.string)),
-            #("requested", json.string(version)),
-          ])),
+          Some(
+            json.object([
+              #(
+                "supported",
+                json.array([modern_version, ..legacy_versions], json.string),
+              ),
+              #("requested", json.string(version)),
+            ]),
+          ),
         ),
         [],
       )
     True -> {
       let name_source = case rpc.method {
-        "tools/call" | "prompts/get" -> Some(param_string(rpc.params, "name") |> option.unwrap(""))
-        "resources/read" -> Some(param_string(rpc.params, "uri") |> option.unwrap(""))
+        "tools/call" | "prompts/get" ->
+          Some(param_string(rpc.params, "name") |> option.unwrap(""))
+        "resources/read" ->
+          Some(param_string(rpc.params, "uri") |> option.unwrap(""))
         _ -> None
       }
       let method = rpc.method
-      case header(req, "mcp-protocol-version"), header(req, "mcp-method"), name_source {
-        h, _, _ if h != Some(version) -> mismatch("MCP-Protocol-Version must equal the _meta protocol version")
-        _, m, _ if m != Some(method) -> mismatch("Mcp-Method must equal the request method")
+      case
+        header(req, "mcp-protocol-version"),
+        header(req, "mcp-method"),
+        name_source
+      {
+        h, _, _ if h != Some(version) ->
+          mismatch("MCP-Protocol-Version must equal the _meta protocol version")
+        _, m, _ if m != Some(method) ->
+          mismatch("Mcp-Method must equal the request method")
         _, _, Some(expected) ->
-          case option.map(header(req, "mcp-name"), decode_header_value) == Some(expected) {
-            True -> dispatch(ctx, principal, rpc, modern_client_name(rpc.params), True)
+          case
+            option.map(header(req, "mcp-name"), decode_header_value)
+            == Some(expected)
+          {
+            True ->
+              dispatch(
+                ctx,
+                principal,
+                rpc,
+                modern_client_name(rpc.params),
+                True,
+              )
             False -> mismatch("Mcp-Name must equal params.name / params.uri")
           }
-        _, _, None -> dispatch(ctx, principal, rpc, modern_client_name(rpc.params), True)
+        _, _, None ->
+          dispatch(ctx, principal, rpc, modern_client_name(rpc.params), True)
       }
     }
   }
@@ -305,7 +417,12 @@ fn modern(ctx: Ctx, req: Request(a), principal: Principal, rpc: Rpc, version: St
 
 // --- legacy ---------------------------------------------------------------------
 
-fn legacy(ctx: Ctx, req: Request(a), principal: Principal, rpc: Rpc) -> Response(mist.ResponseData) {
+fn legacy(
+  ctx: Ctx,
+  req: Request(a),
+  principal: Principal,
+  rpc: Rpc,
+) -> Response(mist.ResponseData) {
   case rpc.method {
     "initialize" -> initialize(ctx, rpc)
     _ -> {
@@ -315,7 +432,11 @@ fn legacy(ctx: Ctx, req: Request(a), principal: Principal, rpc: Rpc) -> Response
       }
       case header_ok {
         False ->
-          respond(400, rpc_error(rpc.id, -32_600, "Unsupported MCP-Protocol-Version", None), [])
+          respond(
+            400,
+            rpc_error(rpc.id, -32_600, "Unsupported MCP-Protocol-Version", None),
+            [],
+          )
         True -> {
           let client_name = case header(req, "mcp-session-id") {
             Some(sid) ->
@@ -334,7 +455,8 @@ fn legacy(ctx: Ctx, req: Request(a), principal: Principal, rpc: Rpc) -> Response
 }
 
 fn initialize(ctx: Ctx, rpc: Rpc) -> Response(mist.ResponseData) {
-  let requested = param_string(rpc.params, "protocolVersion") |> option.unwrap("")
+  let requested =
+    param_string(rpc.params, "protocolVersion") |> option.unwrap("")
   let version = case list.contains(legacy_versions, requested) {
     True -> requested
     False -> "2025-11-25"
@@ -350,7 +472,11 @@ fn initialize(ctx: Ctx, rpc: Rpc) -> Response(mist.ResponseData) {
         mcp_sessions: dict.insert(
           e.mcp_sessions,
           sid,
-          McpSession(client_name:, protocol_version: version, expires_at: now + 86_400_000),
+          McpSession(
+            client_name:,
+            protocol_version: version,
+            expires_at: now + 86_400_000,
+          ),
         ),
       ),
       Nil,
@@ -385,13 +511,19 @@ fn dispatch(
       True ->
         list.append(fields, [
           #("resultType", json.string("complete")),
-          #("_meta", json.object([#("io.modelcontextprotocol/serverInfo", server_info())])),
+          #(
+            "_meta",
+            json.object([#("io.modelcontextprotocol/serverInfo", server_info())]),
+          ),
         ])
       False -> fields
     }
     respond(200, rpc_result(rpc.id, json.object(fields)), [])
   }
-  let cacheable = [#("ttlMs", json.int(60_000)), #("cacheScope", json.string("private"))]
+  let cacheable = [
+    #("ttlMs", json.int(60_000)),
+    #("cacheScope", json.string("private")),
+  ]
   let not_found = fn() {
     respond(
       case is_modern {
@@ -406,7 +538,10 @@ fn dispatch(
     "server/discover" ->
       ok(list.append(
         [
-          #("supportedVersions", json.array([modern_version, ..legacy_versions], json.string)),
+          #(
+            "supportedVersions",
+            json.array([modern_version, ..legacy_versions], json.string),
+          ),
           #("capabilities", capabilities()),
           #("instructions", json.string(tools.instructions(ctx))),
         ],
@@ -414,7 +549,11 @@ fn dispatch(
       ))
     "ping" -> ok([])
     "logging/setLevel" -> ok([])
-    "tools/list" -> ok([#("tools", json.preprocessed_array(tools.definitions(ctx))), ..cacheable])
+    "tools/list" ->
+      ok([
+        #("tools", json.preprocessed_array(tools.definitions(ctx))),
+        ..cacheable
+      ])
     "tools/call" -> {
       let name = param_string(rpc.params, "name") |> option.unwrap("")
       let args =
@@ -427,7 +566,12 @@ fn dispatch(
             None ->
               respond(
                 403,
-                rpc_error(rpc.id, -32_003, "insufficient scope: huddy:write required", None),
+                rpc_error(
+                  rpc.id,
+                  -32_003,
+                  "insufficient scope: huddy:write required",
+                  None,
+                ),
                 [
                   #(
                     "www-authenticate",
@@ -439,7 +583,17 @@ fn dispatch(
               )
             Some(_) ->
               ok([
-                #("content", json.array([text_content("This Huddy URL is read-only; create a read + write URL in Huddy's settings to post.")], fn(x) { x })),
+                #(
+                  "content",
+                  json.array(
+                    [
+                      text_content(
+                        "This Huddy URL is read-only; create a read + write URL in Huddy's settings to post.",
+                      ),
+                    ],
+                    fn(x) { x },
+                  ),
+                ),
                 #("isError", json.bool(True)),
               ])
           }
@@ -463,7 +617,10 @@ fn dispatch(
               #("uri", json.string("huddy://display")),
               #("name", json.string("display")),
               #("title", json.string("Huddy display")),
-              #("description", json.string("The board exactly as humans see it.")),
+              #(
+                "description",
+                json.string("The board exactly as humans see it."),
+              ),
               #("mimeType", json.string("text/plain")),
             ]),
           ]),
@@ -476,7 +633,10 @@ fn dispatch(
           "resourceTemplates",
           json.preprocessed_array([
             json.object([
-              #("uriTemplate", json.string("huddy://agents/{owner}/{name}/{project}")),
+              #(
+                "uriTemplate",
+                json.string("huddy://agents/{owner}/{name}/{project}"),
+              ),
               #("name", json.string("agent")),
               #("title", json.string("One agent's items")),
               #("mimeType", json.string("text/plain")),
@@ -511,7 +671,11 @@ fn dispatch(
           ])
         }
         Error(_) ->
-          respond(200, rpc_error(rpc.id, -32_602, "Resource not found: " <> uri, None), [])
+          respond(
+            200,
+            rpc_error(rpc.id, -32_602, "Resource not found: " <> uri, None),
+            [],
+          )
       }
     }
     "prompts/list" ->
@@ -522,7 +686,12 @@ fn dispatch(
             json.object([
               #("name", json.string("huddy-protocol")),
               #("title", json.string("How to report to Huddy")),
-              #("description", json.string("The reporting protocol for agents on this Huddy board.")),
+              #(
+                "description",
+                json.string(
+                  "The reporting protocol for agents on this Huddy board.",
+                ),
+              ),
             ]),
           ]),
         ),
@@ -543,7 +712,8 @@ fn dispatch(
               ]),
             ),
           ])
-        _ -> respond(200, rpc_error(rpc.id, -32_602, "Unknown prompt", None), [])
+        _ ->
+          respond(200, rpc_error(rpc.id, -32_602, "Unknown prompt", None), [])
       }
     _ -> not_found()
   }
@@ -561,8 +731,8 @@ fn log_tool(principal: Principal, name: String, is_error: Bool) -> Nil {
       <> " by user "
       <> int.to_string(principal.user.id)
       <> case is_error {
-        True -> " (tool error)"
-        False -> ""
-      },
+      True -> " (tool error)"
+      False -> ""
+    },
   )
 }

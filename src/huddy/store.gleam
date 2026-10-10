@@ -130,7 +130,11 @@ pub fn start(
         visible: rank.no_visible(),
         size_warned_at: 0,
       )
-    process.send_after(subject, config.display.rerank_interval_seconds * 1000, Rerank)
+    process.send_after(
+      subject,
+      config.display.rerank_interval_seconds * 1000,
+      Rerank,
+    )
     process.send_after(subject, 60_000, Expire)
     actor.initialised(self)
     |> actor.returning(subject)
@@ -290,13 +294,17 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
           let self = case self.storage_error {
             Some(_) -> {
               logging.log(logging.Notice, "storage: write succeeded again")
-              broadcast(Self(..self, storage_error: None, failures: 0), BoardChanged)
+              broadcast(
+                Self(..self, storage_error: None, failures: 0),
+                BoardChanged,
+              )
             }
             None -> Self(..self, failures: 0)
           }
           let self = check_size(self, now)
           case self.dirty {
-            True -> actor.continue(schedule(self, self.config.storage.flush_ms, now))
+            True ->
+              actor.continue(schedule(self, self.config.storage.flush_ms, now))
             False -> actor.continue(self)
           }
         }
@@ -357,7 +365,9 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
       let snapshot = self.state
       let storage = self.config.storage
       process.spawn_unlinked(fn() {
-        case persist.backup(storage.backup_dir, storage.backup_keep, snapshot, now) {
+        case
+          persist.backup(storage.backup_dir, storage.backup_keep, snapshot, now)
+        {
           Ok(file) -> logging.log(logging.Info, "backup written: " <> file)
           Error(e) -> logging.log(logging.Error, "backup failed: " <> e)
         }
@@ -384,7 +394,11 @@ fn pow2(n: Int) -> Int {
   }
 }
 
-fn compute_view(self: Self, filters: rank.Filters, now: Int) -> #(rank.View, rank.Visible) {
+fn compute_view(
+  self: Self,
+  filters: rank.Filters,
+  now: Int,
+) -> #(rank.View, rank.Visible) {
   let previous = case rank.is_default(filters) {
     True -> self.visible
     False -> rank.no_visible()
@@ -422,13 +436,7 @@ fn start_write(self: Self, now: Int) -> Self {
     }
     process.send(subject, Written(result))
   })
-  Self(
-    ..self,
-    writing: True,
-    dirty: False,
-    inflight: self.pending,
-    pending: [],
-  )
+  Self(..self, writing: True, dirty: False, inflight: self.pending, pending: [])
 }
 
 fn check_size(self: Self, now: Int) -> Self {
@@ -493,7 +501,10 @@ fn notify_decision(self: Self, item_id: Int) -> Self {
                     }),
                   ),
                   #("body", json.string(item.title)),
-                  #("count", json.int(rank.unseen_decisions_for(self.state, owner_id))),
+                  #(
+                    "count",
+                    json.int(rank.unseen_decisions_for(self.state, owner_id)),
+                  ),
                 ])
                 |> json.to_string
               list.each(self.subscribers, fn(s) {

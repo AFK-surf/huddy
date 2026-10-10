@@ -28,7 +28,11 @@ pub type Answer {
     confidence: Float,
     probabilities: Dict(String, Float),
   )
-  ScoreAnswer(score: Float, confidence: Float, probabilities: Dict(String, Float))
+  ScoreAnswer(
+    score: Float,
+    confidence: Float,
+    probabilities: Dict(String, Float),
+  )
 }
 
 pub type Response {
@@ -122,17 +126,21 @@ fn answer_decoder() -> Decoder(Answer) {
 
 pub fn decode_response(body: String) -> Result(Response, String) {
   let decoder = {
-    use answers <- decode.field("answers", decode.dict(decode.string, answer_decoder()))
-    use #(input, output) <- decode.optional_field(
-      "usage",
-      #(0, 0),
-      {
-        use i <- decode.optional_field("input_tokens", 0, decode.int)
-        use o <- decode.optional_field("output_tokens", 0, decode.int)
-        decode.success(#(i, o))
-      },
+    use answers <- decode.field(
+      "answers",
+      decode.dict(decode.string, answer_decoder()),
     )
-    decode.success(Response(answers:, input_tokens: input, output_tokens: output, raw: body))
+    use #(input, output) <- decode.optional_field("usage", #(0, 0), {
+      use i <- decode.optional_field("input_tokens", 0, decode.int)
+      use o <- decode.optional_field("output_tokens", 0, decode.int)
+      decode.success(#(i, o))
+    })
+    decode.success(Response(
+      answers:,
+      input_tokens: input,
+      output_tokens: output,
+      raw: body,
+    ))
   }
   json.parse(body, decoder)
   |> result.replace_error("unexpected response from the decision model")
@@ -161,7 +169,8 @@ pub fn client(cfg: config.DecisionModel) -> Ask {
         case e {
           httpc.ResponseTimeout -> "decision model timed out"
           httpc.FailedToConnect(..) -> "cannot connect to the decision model"
-          httpc.InvalidUtf8Response -> "invalid response from the decision model"
+          httpc.InvalidUtf8Response ->
+            "invalid response from the decision model"
         }
       }),
     )

@@ -2,6 +2,7 @@
 
 import gleam/int
 import gleam/result
+import gleam/string
 import huddy/ctx.{type Ctx}
 import huddy/state
 import huddy/store
@@ -23,7 +24,13 @@ pub fn handle(ctx: Ctx, req: Request, id: String, action: String) -> Response {
               let applied = case action {
                 "seen" -> state.mark_seen(s, item_id, user.id, now)
                 "hide" ->
-                  state.hide(s, item_id, user.id, session.form_value(form, "note"), now)
+                  state.hide(
+                    s,
+                    item_id,
+                    user.id,
+                    string.slice(session.form_value(form, "note"), 0, 200),
+                    now,
+                  )
                 "unhide" -> state.unhide(s, item_id, user.id, now)
                 _ -> Error("unknown action")
               }

@@ -38,7 +38,10 @@ type Conn {
 }
 
 /// The user behind the session cookie (mist-level request, no wisp).
-fn session_user(ctx: Ctx, req: Request(mist.Connection)) -> Option(#(String, User)) {
+fn session_user(
+  ctx: Ctx,
+  req: Request(mist.Connection),
+) -> Option(#(String, User)) {
   let token =
     request.get_cookies(req)
     |> list.key_find(session.cookie_name)
@@ -65,7 +68,10 @@ fn validate(ctx: Ctx, sha: String) -> Option(User) {
   }
 }
 
-pub fn handle(ctx: Ctx, req: Request(mist.Connection)) -> Response(mist.ResponseData) {
+pub fn handle(
+  ctx: Ctx,
+  req: Request(mist.Connection),
+) -> Response(mist.ResponseData) {
   case session_user(ctx, req) {
     None ->
       response.new(401)
@@ -106,7 +112,11 @@ pub fn handle(ctx: Ctx, req: Request(mist.Connection)) -> Response(mist.Response
   }
 }
 
-fn send(conn: mist.SSEConnection, name: String, data: String) -> Result(Nil, Nil) {
+fn send(
+  conn: mist.SSEConnection,
+  name: String,
+  data: String,
+) -> Result(Nil, Nil) {
   mist.send_event(
     conn,
     mist.event(string_tree.from_string(data)) |> mist.event_name(name),
@@ -118,7 +128,11 @@ fn stop(c: Conn) -> actor.Next(Conn, BoardEvent) {
   actor.stop()
 }
 
-fn loop(c: Conn, msg: BoardEvent, conn: mist.SSEConnection) -> actor.Next(Conn, BoardEvent) {
+fn loop(
+  c: Conn,
+  msg: BoardEvent,
+  conn: mist.SSEConnection,
+) -> actor.Next(Conn, BoardEvent) {
   case msg {
     store.BoardChanged ->
       case c.pending {

@@ -22,8 +22,13 @@ const max_bytes = 10_240
 
 /// Validate that a URL is an acceptable CIMD client_id and that its host
 /// resolves only to public addresses.
-pub fn check_url(url: String, trusted_hosts: List(String)) -> Result(String, String) {
-  use parsed <- result.try(uri.parse(url) |> result.replace_error("client_id is not a URL"))
+pub fn check_url(
+  url: String,
+  trusted_hosts: List(String),
+) -> Result(String, String) {
+  use parsed <- result.try(
+    uri.parse(url) |> result.replace_error("client_id is not a URL"),
+  )
   use host <- result.try(case parsed.scheme, parsed.host {
     Some("https"), Some(host) -> Ok(string.lowercase(host))
     _, _ -> Error("client_id must be an https URL")
@@ -41,7 +46,8 @@ pub fn check_url(url: String, trusted_hosts: List(String)) -> Result(String, Str
     hosts ->
       case list.contains(hosts, host) {
         True -> Ok(Nil)
-        False -> Error("client host " <> host <> " is not trusted by this server")
+        False ->
+          Error("client host " <> host <> " is not trusted by this server")
       }
   })
   use addresses <- result.try(
@@ -54,7 +60,9 @@ pub fn check_url(url: String, trusted_hosts: List(String)) -> Result(String, Str
 }
 
 /// The real fetcher: no redirects, 5 s timeout.
-pub fn http_fetch(url: String) -> Result(#(Int, List(#(String, String)), String), String) {
+pub fn http_fetch(
+  url: String,
+) -> Result(#(Int, List(#(String, String)), String), String) {
   use req <- result.try(request.to(url) |> result.replace_error("bad URL"))
   let req = request.set_header(req, "accept", "application/json")
   httpc.configure()
@@ -85,7 +93,10 @@ pub fn fetch(
   let decoder = {
     use client_id <- decode.field("client_id", decode.string)
     use client_name <- decode.optional_field("client_name", host, decode.string)
-    use redirect_uris <- decode.field("redirect_uris", decode.list(decode.string))
+    use redirect_uris <- decode.field(
+      "redirect_uris",
+      decode.list(decode.string),
+    )
     decode.success(#(client_id, client_name, redirect_uris))
   }
   use #(client_id, client_name, redirect_uris) <- result.try(
