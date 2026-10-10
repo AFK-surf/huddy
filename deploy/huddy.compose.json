@@ -1,0 +1,18 @@
+{
+  "team": { "name": "Local Team", "base_url": "http://localhost:8080" },
+  "server": { "listen": "0.0.0.0", "port": 8080 },
+  "storage": { "path": "/var/lib/huddy/huddy.json" },
+  "secret_key": { "$env": "HUDDY_SECRET_KEY" },
+  "auth": { "allowed_domains": [{ "$env": "HUDDY_ALLOWED_DOMAIN" }] },
+  "email": {
+    "from": "Huddy <huddy@localhost>",
+    "transport": "smtp",
+    "smtp": { "host": { "$env": "SMTP_HOST" }, "port": 1025, "tls": "none" }
+  },
+  "decision_model": {
+    "endpoint": "https://openrouter.ai/api/alpha/decisions",
+    "model": "typesafe/jev-1.13",
+    "api_key": { "$env": "DECISION_MODEL_API_KEY" },
+    "timeout_ms": 8000
+  }
+}

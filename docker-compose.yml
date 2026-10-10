@@ -1,0 +1,33 @@
+# Local bring-up of the whole stack: Huddy + Mailpit (catches all e-mail).
+#
+#   cp deploy/.env.example .env      # fill in the keys
+#   docker compose up --build
+#
+# Huddy:   http://localhost:8080   (sign in with any address on the allowlist)
+# Mailpit: http://localhost:8025   (sign-in codes land here; Huddy sends no other e-mail)
+services:
+  huddy:
+    build: .
+    image: huddy:local
+    ports:
+      - "8080:8080"
+    environment:
+      HUDDY_SECRET_KEY: ${HUDDY_SECRET_KEY:?set HUDDY_SECRET_KEY in .env}
+      DECISION_MODEL_API_KEY: ${DECISION_MODEL_API_KEY:?set DECISION_MODEL_API_KEY in .env}
+      HUDDY_ALLOWED_DOMAIN: ${HUDDY_ALLOWED_DOMAIN:-example.com}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+    volumes:
+      - huddy-data:/var/lib/huddy
+      - ./deploy/huddy.compose.json:/etc/huddy/huddy.json:ro
+    depends_on:
+      - mailpit
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.31
+    ports:
+      - "8025:8025"   # web UI; SMTP (1025) stays on the compose network
+    restart: unless-stopped
+
+volumes:
+  huddy-data:

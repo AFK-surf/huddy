@@ -1,0 +1,103 @@
+{
+  "team": {
+    "name": "Acme Platform",
+    "base_url": "https://huddy.acme.dev"
+  },
+  "server": {
+    "listen": "0.0.0.0",
+    "port": 8080,
+    "trusted_proxies": ["10.0.0.0/8"]
+  },
+  "storage": {
+    "path": "/var/lib/huddy/huddy.json",
+    "backup_dir": "/var/lib/huddy/backups",
+    "backup_keep": 7,
+    "flush_ms": 100,
+    "idle_flush_seconds": 5,
+    "warn_mb": 10
+  },
+  "secret_key": { "$env": "HUDDY_SECRET_KEY" },
+
+  "auth": {
+    "allowed_domains": ["acme.dev"],
+    "allowed_emails": ["contractor@gmail.com"],
+    "code_ttl_minutes": 10,
+    "code_max_attempts": 5,
+    "session_ttl_days": 30
+  },
+
+  "email": {
+    "from": "Huddy <huddy@acme.dev>",
+    "transport": "smtp",
+    "smtp": {
+      "host": "smtp.acme.dev",
+      "port": 587,
+      "tls": "starttls",
+      "username": "huddy",
+      "password": { "$env": "SMTP_PASSWORD" }
+    }
+  },
+
+  "mcp": {
+    "secret_urls": true,
+    "oauth": {
+      "access_token_ttl_minutes": 60,
+      "refresh_token_ttl_days": 30,
+      "client_id_metadata_documents": true,
+      "dynamic_client_registration": true,
+      "trusted_client_hosts": []
+    }
+  },
+
+  "decision_model": {
+    "provider": "typesafe",
+    "endpoint": "https://api.typesafe.ai/v1/systemone",
+    "model": "jev-latest",
+    "api_key": { "$env": "TYPESAFE_API_KEY" },
+    "enabled": true,
+    "timeout_ms": 4000
+  },
+
+  "review": {
+    "wait_ms": 2500,
+    "thresholds": {
+      "wrong_kind": 0.7,
+      "unclear": 0.4,
+      "not_a_question": 0.4,
+      "duplicate": 0.75,
+      "overlap": 0.7,
+      "stale": 0.6,
+      "injection": 0.7
+    },
+    "sweep_interval_minutes": 15,
+    "sweep_idle_hours": 2,
+    "untouched_days": 3,
+    "open_tasks_guideline": 5,
+    "open_decisions_guideline": 3,
+    "dismiss_cooldown_hours": 24
+  },
+
+  "notify": {
+    "browser": true
+  },
+
+  "display": {
+    "slots": { "goals": 8, "tasks": 12, "decisions": 6 },
+    "per_agent_cap": { "tasks": 3, "decisions": 2 },
+    "agent_away_after_minutes": 120,
+    "rerank_interval_seconds": 30
+  },
+
+  "limits": {
+    "title_max_chars": 120,
+    "detail_max_chars": 2000,
+    "writes_per_agent_per_minute": 12
+  },
+
+  "retention": {
+    "closed_items_days": 30,
+    "events_days": 90,
+    "judgment_detail_days": 14,
+    "judgments_days": 90
+  }
+}
