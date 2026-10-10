@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Huddy mockup</title>
+<title>(1) Huddy</title>
 <!--
   Static mockup of the Huddy display (docs/DESIGN.md §9).
   In the real app the hand-drawn shapes are generated server-side by a Gleam
@@ -84,7 +84,11 @@ header .stats { margin-left: auto; font-family: var(--hand); font-size: 18px; di
 .opts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
 .btn { font-family: var(--hand); font-size: 17px; padding: 2px 12px 3px; background: none; border: 0; color: var(--ink); cursor: pointer; }
 .btn.ghost { color: var(--muted); }
-.answered { font-family: var(--hand); font-size: 17px; color: var(--muted); margin-top: 14px; }
+.options { font-size: 14px; margin: 0 0 10px; }
+.options b { font-weight: 600; }
+.seen { font-family: var(--hand); font-size: 16px; color: var(--muted); }
+.yours { font-family: var(--hand); font-size: 16px; color: var(--goal); margin-left: 4px; white-space: nowrap; }
+.hint { font-family: var(--hand); font-size: 17px; color: var(--muted); margin-top: 14px; }
 
 .goals { display: flex; flex-direction: column; gap: 18px; }
 .goal { display: flex; align-items: center; gap: 12px; }
@@ -117,6 +121,7 @@ footer { font-family: var(--hand); font-size: 15px; color: var(--muted); margin-
     <span>7 agents</span>
     <span class="blk">2 blocked</span>
     <span class="live">live</span>
+    <span>🔔 on</span>
     <span>you: alice</span>
   </div>
 </header>
@@ -132,38 +137,38 @@ footer { font-family: var(--hand); font-size: 15px; color: var(--muted); margin-
 </nav>
 
 <section class="zone" id="zone-decisions">
-  <h2><span data-icon="decision-blocking" data-seed="h-d"></span>Needs a human <small>3 open · 1 answered</small></h2>
+  <h2><span data-icon="decision-blocking" data-seed="h-d"></span>Needs a human <small>3 open · 1 yours</small></h2>
   <div class="decisions">
     <article class="card sk" data-fill="dec" data-seed="d12">
       <span class="tag sk" data-seed="tag12" data-stroke="red">BLOCKED</span>
       <div class="title">Drop the legacy /v1 API in this release?</div>
       <div class="meta">bob/claude-code/api · waiting 2h</div>
       <div class="detail">3 internal callers still use /v1. Dropping now removes ~1.2k lines; keeping it means another adapter for the new auth.</div>
+      <div class="options"><b>options:</b> keep for now · drop it</div>
       <div class="opts">
-        <button class="btn sk" data-seed="o1">keep for now</button>
-        <button class="btn sk" data-seed="o2">drop it</button>
-        <button class="btn ghost">reply…</button>
+        <span class="seen">seen by bob · 1h</span>
+        <button class="btn ghost">hide</button>
       </div>
     </article>
     <article class="card sk" data-fill="dec" data-seed="d15">
       <span class="tag sk" data-seed="tag15" data-stroke="red">BLOCKED</span>
       <div class="title">Which email provider for login codes?</div>
-      <div class="meta">alice/codex/huddy · waiting 8m</div>
+      <div class="meta">alice/codex/huddy · waiting 8m <span class="yours">· yours</span></div>
       <div class="detail">Need SMTP creds to finish M0. Postmark has a free tier; SES is already in our AWS account.</div>
+      <div class="options"><b>options:</b> SES · Postmark</div>
       <div class="opts">
-        <button class="btn sk" data-seed="o3">SES</button>
-        <button class="btn sk" data-seed="o4">Postmark</button>
-        <button class="btn ghost">reply…</button>
+        <button class="btn sk" data-seed="o3">seen</button>
+        <button class="btn ghost">hide</button>
       </div>
     </article>
     <article class="card sk" data-seed="d9" data-icon-inline="decision">
       <div class="title">Rename “agent” to “worker” in the settings UI?</div>
       <div class="meta">carol/codex/web · open 1d · non-blocking</div>
       <div class="detail">Users confuse “agent” with support agents. Cosmetic, but touches ~40 strings.</div>
-      <div class="opts"><button class="btn ghost">reply…</button></div>
+      <div class="opts"><span class="seen">seen by dan · 3h</span><button class="btn ghost">hide</button></div>
     </article>
   </div>
-  <div class="answered">◇ answered · waiting for agent — “Retry budget for flaky CI?” → dan: “3 retries, then page” · dan/codex/infra</div>
+  <div class="hint">answers go to the agent in its own session · the agent marks the decision resolved</div>
 </section>
 
 <div class="cols">
@@ -226,6 +231,7 @@ footer { font-family: var(--hand); font-size: 15px; color: var(--muted); margin-
   <span><span data-icon="decision" data-seed="l4"></span>non-blocking decision</span>
   <span style="opacity:.45">faded = may be outdated</span>
   <span>≈ = overlapping work</span>
+  <span>⚠ = flagged by review</span>
 </div>
 <footer><span>ranked 12s ago</span><span>Jev: 41k tokens this month</span><span>settings</span><span>sign out</span></footer>
 <p class="note">Static mockup for docs/DESIGN.md. Real shapes are rendered server-side, deterministically seeded per item.</p>
