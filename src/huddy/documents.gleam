@@ -262,8 +262,8 @@ pub fn discard(ctx: Ctx, storage_key: String) -> Nil {
   Nil
 }
 
-/// Upload a new document for `agent_id`, or a new version of one of its
-/// documents (`replaces`). The title is `title`, else the first `# ` heading
+/// Upload a new document for `agent_id`, or a new version of any document
+/// (`replaces`). The title is `title`, else the first `# ` heading
 /// of index.md, else (for a new version) the previous title.
 pub fn upload(
   ctx: Ctx,
@@ -349,6 +349,24 @@ pub fn upload(
       Error(reason)
     }
   }
+}
+
+/// Delete a document and, once that is durable, its files. `actor` is
+/// `state.agent_actor(…)` or `state.user_actor(…)`.
+pub fn delete(ctx: Ctx, id: Int, actor: String) -> Result(Document, String) {
+  let deleted =
+    store.update(ctx.store, fn(s, e, now) {
+      case state.delete_document(s, id, actor, now) {
+        Ok(#(s, doc)) -> store.Changed(s, e, [store.Publish], Ok(doc))
+        Error(reason) -> store.NoChange(Error(reason))
+      }
+    })
+    |> result.flatten
+  case deleted {
+    Ok(doc) -> discard(ctx, doc.storage_key)
+    Error(_) -> Nil
+  }
+  deleted
 }
 
 /// One file of a document, if the document has it.

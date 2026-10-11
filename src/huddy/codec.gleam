@@ -183,6 +183,7 @@ pub fn encode_document(d: Document) -> Json {
   json.object([
     #("id", json.int(d.id)),
     #("agent", json.int(d.agent)),
+    #("updated_by", json.int(d.updated_by)),
     #("title", json.string(d.title)),
     #(
       "files",
@@ -510,6 +511,7 @@ pub fn item_decoder() -> Decoder(Item) {
 pub fn document_decoder() -> Decoder(Document) {
   use id <- decode.field("id", decode.int)
   use agent <- decode.field("agent", decode.int)
+  use updated_by <- decode.optional_field("updated_by", agent, decode.int)
   use title <- decode.field("title", decode.string)
   use files <- decode.field(
     "files",
@@ -527,6 +529,7 @@ pub fn document_decoder() -> Decoder(Document) {
   decode.success(Document(
     id:,
     agent:,
+    updated_by:,
     title:,
     files:,
     size:,
@@ -831,7 +834,17 @@ pub fn check_references(state: State) -> Result(Nil, String) {
       })
     let r8 =
       check_all(dict.values(state.documents), fn(d) {
-        check(dict.has_key(state.agents, d.agent), "document agent", d.agent)
+        case
+          check(dict.has_key(state.agents, d.agent), "document agent", d.agent)
+        {
+          Ok(_) ->
+            check(
+              dict.has_key(state.agents, d.updated_by),
+              "document updated_by",
+              d.updated_by,
+            )
+          e -> e
+        }
       })
     [r1, r2, r3, r4, r5, r6, r7, r8]
   }

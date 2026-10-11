@@ -724,19 +724,10 @@ pub fn documents_flow_test() {
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = user_with_link(ctx, "bob@acme.dev", Some(#("claude-code", "api")))
 
-  // plain Markdown
-  let resp =
-    rpc(
-      alice,
-      [],
-      call(
-        "huddy_doc_upload",
-        json.object([
-          #("markdown", json.string("# Design notes\n\nSome *text*.")),
-        ]),
-      ),
-    )
-  assert string.contains(tool_text(resp), "Stored doc1 v1 \"Design notes\"")
+  // plain Markdown, through a one-time upload URL
+  let resp = upload_doc(alice, [], <<"# Design notes\n\nSome *text*.":utf8>>)
+  assert resp.status == 200
+  assert string.contains(resp.body, "Stored doc1 v1 \\\"Design notes\\\"")
 
   // a zip with an image, title given explicitly
   let png = <<0x89, "PNG":utf8, 13, 10, 26, 10, 1, 2, 3>>
@@ -745,20 +736,10 @@ pub fn documents_flow_test() {
       #("index.md", <<"# Ignored\n![arch](img/arch.png)":utf8>>),
       #("img/arch.png", png),
     ])
-  let resp =
-    rpc(
-      alice,
-      [],
-      call(
-        "huddy_doc_upload",
-        json.object([
-          #("title", json.string("Architecture")),
-          #("zip_base64", json.string(bit_array.base64_encode(zip, True))),
-        ]),
-      ),
-    )
-  assert string.contains(tool_text(resp), "Stored doc2 v1 \"Architecture\"")
-  assert structured(resp, ["result", "url"]) == base(ctx) <> "/docs/doc2"
+  let resp = upload_doc(alice, [#("title", json.string("Architecture"))], zip)
+  assert resp.status == 200
+  assert string.contains(resp.body, "Stored doc2 v1 \\\"Architecture\\\"")
+  assert string.contains(resp.body, "\"url\":\"" <> base(ctx) <> "/docs/doc2\"")
 
   // everyone can list and read every document
   let resp = rpc(bob, [], call("huddy_doc_list", json.object([])))
@@ -816,24 +797,23 @@ pub fn documents_flow_test() {
   assert is_error(resp)
   assert string.contains(tool_text(resp), "Its files: img/arch.png, index.md")
 
-  // only the uploader can replace a document
-  let replace = fn(url) {
+  // any agent can replace any document; it keeps its id
+  let resp =
+    upload_doc(bob, [#("id", json.string("doc1"))], <<"# Design notes v2":utf8>>)
+  assert string.contains(resp.body, "Stored doc1 v2")
+  let resp = rpc(alice, [], call("huddy_doc_list", json.object([])))
+  assert string.contains(
+    tool_text(resp),
+    "doc1 \"Design notes v2\" — alice/codex/huddy (v2 by bob/claude-code/api)",
+  )
+  let resp =
     rpc(
-      url,
+      bob,
       [],
-      call(
-        "huddy_doc_upload",
-        json.object([
-          #("id", json.string("doc1")),
-          #("markdown", json.string("# Design notes v2")),
-        ]),
-      ),
+      call("huddy_doc_upload", json.object([#("id", json.string("doc42"))])),
     )
-  }
-  let resp = replace(bob)
   assert is_error(resp)
-  assert string.contains(tool_text(resp), "only that agent can replace it")
-  assert string.contains(tool_text(replace(alice)), "Stored doc1 v2")
+  assert string.contains(tool_text(resp), "No document doc42")
 
   // items link documents, and the board shows them
   let resp =
@@ -888,6 +868,22 @@ pub fn documents_flow_test() {
   let again = send(http.Post, url, [], "# Again")
   assert again.status == 404
 
+  // any agent can delete any document
+  let resp =
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_delete", json.object([#("id", json.string("doc3"))])),
+    )
+  assert string.contains(tool_text(resp), "Deleted doc3")
+  let resp =
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_delete", json.object([#("id", json.string("doc3"))])),
+    )
+  assert is_error(resp)
+
   // the web pages
   let cookie = web_session(ctx, "carol@acme.dev")
   let get = fn(path) {
@@ -935,8 +931,26 @@ pub fn documents_flow_test() {
   let resp = rpc(alice, [], call("huddy_read", json.object([])))
   assert !string.contains(tool_text(resp), "doc2")
   process.sleep(200)
-  let assert Ok(left) = blob_tree(ctx)
-  assert list.length(left) == 2
+  // only doc1's current version is left: its v1, doc2 and doc3 are gone
+  let assert Ok([left]) = blob.list_tree(ctx.config.storage.documents_dir)
+  assert string.ends_with(left, "/index.md")
+}
+
+/// Upload a document the only way agents can: ask huddy_doc_upload for a
+/// one-time URL, then POST the bytes to it.
+fn upload_doc(
+  mcp: String,
+  args: List(#(String, json.Json)),
+  body: BitArray,
+) -> Response(String) {
+  let resp = rpc(mcp, [], call("huddy_doc_upload", json.object(args)))
+  let url = structured(resp, ["result", "upload_url"])
+  let assert Ok(req) = request.to(url)
+  let req = req |> request.set_method(http.Post) |> request.set_body(body)
+  let assert Ok(resp) =
+    httpc.configure() |> httpc.timeout(5000) |> httpc.dispatch_bits(req)
+  let assert Ok(text) = bit_array.to_string(resp.body)
+  response.set_body(resp, text)
 }
 
 fn get_bits(url: String, cookie: String) -> Response(BitArray) {
@@ -948,9 +962,4 @@ fn get_bits(url: String, cookie: String) -> Response(BitArray) {
   let assert Ok(resp) =
     httpc.configure() |> httpc.timeout(5000) |> httpc.dispatch_bits(req)
   resp
-}
-
-fn blob_tree(ctx: Ctx) -> Result(List(String), String) {
-  // doc1 (v2 only, v1 was deleted) and doc3, one index.md each
-  blob.list_tree(ctx.config.storage.documents_dir)
 }

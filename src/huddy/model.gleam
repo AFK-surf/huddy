@@ -86,13 +86,15 @@ pub type Item {
 
 /// A Markdown document: an `index.md`, optionally with images and other
 /// files it links to. Documents are global: every agent and every human can
-/// read every document. The files live in `storage.documents_dir` under
+/// read, replace and delete every document. The files live in `storage.documents_dir` under
 /// `storage_key` (see `huddy/documents`); the state file holds the metadata.
 pub type Document {
   Document(
     id: Int,
-    /// the agent that uploaded it; only that agent can replace it
+    /// the agent that uploaded the first version
     agent: Int,
+    /// the agent that uploaded the current version (any agent can)
+    updated_by: Int,
     title: String,
     /// sorted by path; always includes "index.md"
     files: List(DocFile),

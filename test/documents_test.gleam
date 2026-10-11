@@ -122,7 +122,7 @@ fn new_doc(title: String, replaces) -> state.NewDocument {
   )
 }
 
-pub fn documents_are_versioned_by_their_uploader_test() {
+pub fn any_agent_can_version_a_document_test() {
   let #(s, a, b) = support.two_agents(now)
   let assert Ok(#(s, doc, None)) =
     state.put_document(s, a, new_doc("v1", None), now)
@@ -134,12 +134,16 @@ pub fn documents_are_versioned_by_their_uploader_test() {
   assert doc2.id == doc.id
   assert doc2.version == 2
   assert doc2.created_at == now
-  // another agent can read it but not replace it
-  let assert Error(message) =
-    state.put_document(s, b, new_doc("theirs", Some(doc.id)), now)
-  assert string.contains(message, "only that agent")
+  // documents are shared: another agent can replace it too
+  let assert Ok(#(s, doc3, Some("key-v2"))) =
+    state.put_document(s, b, new_doc("theirs", Some(doc.id)), now + 2)
+  assert doc3.version == 3
+  assert doc3.agent == a
+  assert doc3.updated_by == b
+  assert state.doc_byline(s, doc3)
+    == "alice/codex/huddy (v3 by bob/claude-code/api)"
   let assert Error(_) = state.put_document(s, a, new_doc("x", Some(99)), now)
-  assert list.map(state.documents(s), fn(d) { d.title }) == ["v2"]
+  assert list.map(state.documents(s), fn(d) { d.title }) == ["theirs"]
 }
 
 pub fn items_link_documents_test() {
@@ -193,7 +197,8 @@ pub fn deleting_a_document_unlinks_it_test() {
       now,
     )
   assert list.map(state.items_with_doc(s, doc.id), fn(i) { i.id }) == [t.id]
-  let assert Ok(#(s, deleted)) = state.delete_document(s, doc.id, 1, now)
+  let assert Ok(#(s, deleted)) =
+    state.delete_document(s, doc.id, state.agent_actor(a), now)
   assert deleted.storage_key == "key-Old"
   assert state.get_document(s, doc.id) == None
   let assert Some(item) = state.get_item(s, t.id)

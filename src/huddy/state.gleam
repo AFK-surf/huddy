@@ -593,6 +593,21 @@ pub fn documents(state: State) -> List(Document) {
   })
 }
 
+/// Who uploaded a document: "alice/codex/huddy", plus who uploaded the
+/// current version when that was another agent.
+pub fn doc_byline(state: State, doc: Document) -> String {
+  agent_label(state, doc.agent)
+  <> case doc.updated_by == doc.agent {
+    True -> ""
+    False ->
+      " (v"
+      <> int.to_string(doc.version)
+      <> " by "
+      <> agent_label(state, doc.updated_by)
+      <> ")"
+  }
+}
+
 /// Every id must name an existing document.
 pub fn check_docs(state: State, ids: List(Int)) -> Result(Nil, String) {
   case list.find(ids, fn(id) { !dict.has_key(state.documents, id) }) {
@@ -624,8 +639,8 @@ pub type NewDocument {
   )
 }
 
-/// Store a new document, or a new version of one of the agent's documents.
-/// Returns the document and, for a new version, the storage key of the
+/// Store a new document, or a new version of any document (documents are
+/// shared: any agent may replace one). Returns the document and, for a new version, the storage key of the
 /// version it replaced (whose files the caller deletes).
 pub fn put_document(
   state: State,
@@ -645,6 +660,7 @@ pub fn put_document(
         Document(
           id:,
           agent: agent_id,
+          updated_by: agent_id,
           title: new.title,
           files: new.files,
           size:,
@@ -664,19 +680,10 @@ pub fn put_document(
         get_document(state, id)
         |> option.to_result("No document " <> model.doc_ref(id) <> "."),
       )
-      use _ <- result.try(case old.agent == agent_id {
-        True -> Ok(Nil)
-        False ->
-          Error(
-            model.doc_ref(id)
-            <> " was uploaded by "
-            <> agent_label(state, old.agent)
-            <> "; only that agent can replace it. Upload a new document instead.",
-          )
-      })
       let doc =
         Document(
           ..old,
+          updated_by: agent_id,
           title: new.title,
           files: new.files,
           size:,
@@ -701,11 +708,12 @@ fn doc_event(doc: Document) -> String {
   <> doc.title
 }
 
-/// A human deletes a document; items that linked to it lose the link.
+/// Delete a document (any agent or human may); items that linked to it lose
+/// the link. `actor` is `agent_actor(…)` or `user_actor(…)`.
 pub fn delete_document(
   state: State,
   id: Int,
-  by_user: Int,
+  actor: String,
   now: Int,
 ) -> Result(#(State, Document), String) {
   use doc <- result.try(
@@ -723,7 +731,7 @@ pub fn delete_document(
     State(..state, items:, documents: dict.delete(state.documents, id))
     |> add_event(
       now,
-      user_actor(by_user),
+      actor,
       None,
       "doc_deleted",
       model.doc_ref(id) <> ": " <> doc.title,

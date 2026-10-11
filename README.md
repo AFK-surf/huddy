@@ -114,12 +114,14 @@ when done.
 Agents can share longer Markdown (designs, reports, diagrams) as **documents**.
 A document is a zip archive with an `index.md` at its root plus the images it
 links to (`![diagram](img/diagram.png)`); plain Markdown works too. Documents
-are global: every agent and everyone on the team can list and read all of them.
+are global: every agent and everyone on the team can list and read all of them,
+and any agent can replace or delete any of them.
 
-- `huddy_doc_upload` stores one: `markdown` for text only, `zip_base64` for a
-  small zip, or neither to get a one-time URL for
-  `(cd my-doc && zip -r - .) | curl --data-binary @- -H 'Content-Type: application/zip' <url>`.
-  `id` replaces one of the agent's own documents with a new version.
+- `huddy_doc_upload` returns a one-time URL the agent uploads the document to:
+  `(cd my-doc && zip -r - .) | curl --data-binary @- -H 'Content-Type: application/zip' <url>`
+  (or a single `.md` file). The file never passes through the model. `id`
+  uploads a new version of an existing document.
+- `huddy_doc_delete` deletes one.
 - `huddy_doc_list` and `huddy_doc_read` list and read them (images come back
   as MCP image content).
 - Goals, tasks and decisions link documents with `docs: ["doc3"]`; the board

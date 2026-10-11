@@ -304,39 +304,30 @@ fn post(
   req: Request(mist.Connection),
   auth: Auth,
 ) -> Response(mist.ResponseData) {
-  // Authenticate (headers and path only) before reading the body: the body
-  // limit is large, since documents can be uploaded as base64 in a tool call.
-  let limit =
-    int.max(1_048_576, ctx.config.limits.document_max_mb * 1_400_000 + 65_536)
-  case authenticate(ctx, req, auth) {
-    Error(resp) -> resp
-    Ok(principal) ->
-      case mist.read_body(req, limit) {
+  case mist.read_body(req, 1_048_576) {
+    Error(_) ->
+      respond(
+        413,
+        rpc_error(NoId, -32_600, "request body too large or unreadable", None),
+        [],
+      )
+    Ok(req) ->
+      case parse(req.body) {
         Error(_) ->
           respond(
-            413,
+            400,
             rpc_error(
               NoId,
-              -32_600,
-              "request body too large or unreadable",
+              -32_700,
+              "parse error: expected one JSON-RPC message",
               None,
             ),
             [],
           )
-        Ok(req) ->
-          case parse(req.body) {
-            Error(_) ->
-              respond(
-                400,
-                rpc_error(
-                  NoId,
-                  -32_700,
-                  "parse error: expected one JSON-RPC message",
-                  None,
-                ),
-                [],
-              )
-            Ok(rpc) ->
+        Ok(rpc) ->
+          case authenticate(ctx, req, auth) {
+            Error(resp) -> resp
+            Ok(principal) ->
               case rpc.id, meta_string(rpc.params, meta_version) {
                 // notifications (no id) are accepted and ignored
                 NoId, _ -> empty(202, [])

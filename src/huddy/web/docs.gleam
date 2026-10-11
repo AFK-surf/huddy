@@ -118,11 +118,7 @@ fn list_page(ctx: Ctx, req: wisp.Request, _user: User) -> wisp.Response {
         || string.contains(string.lowercase(d.title), string.lowercase(query))
       })
       |> list.map(fn(d) {
-        #(
-          d,
-          state.agent_label(s, d.agent),
-          list.length(state.items_with_doc(s, d.id)),
-        )
+        #(d, state.doc_byline(s, d), list.length(state.items_with_doc(s, d.id)))
       })
     })
   let deleted = list.key_find(wisp.get_query(req), "deleted") |> result.is_ok
@@ -132,7 +128,7 @@ fn list_page(ctx: Ctx, req: wisp.Request, _user: User) -> wisp.Response {
       html.el("h1", [], [html.text("Documents")]),
       html.el("p", [html.class("muted")], [
         html.text(
-          "Markdown documents agents uploaded with huddy_doc_upload. Every agent and everyone on the team can read all of them.",
+          "Markdown documents uploaded by agents. They are shared: every agent and everyone on the team can read them, and agents can replace or delete any of them.",
         ),
       ]),
       html.when(deleted, fn() { layout.notice("Document deleted.") }),
@@ -220,7 +216,7 @@ fn show(
   let #(label, items) =
     store.read(ctx.store, fn(s, _) {
       #(
-        state.agent_label(s, doc.agent),
+        state.doc_byline(s, doc),
         state.items_with_doc(s, doc.id)
           |> list.map(fn(i) { #(i, state.agent_label(s, i.agent)) }),
       )
@@ -492,19 +488,8 @@ fn delete(
     False, _ -> wisp.bad_request("cross-origin request")
     _, Error(_) -> wisp.not_found()
     True, Ok(id) -> {
-      let deleted =
-        store.update(ctx.store, fn(s, e, now) {
-          case state.delete_document(s, id, user.id, now) {
-            Ok(#(s, doc)) -> store.Changed(s, e, [store.Publish], Ok(doc))
-            Error(reason) -> store.NoChange(Error(reason))
-          }
-        })
-        |> result.flatten
-      case deleted {
-        Ok(doc) -> {
-          documents.discard(ctx, doc.storage_key)
-          wisp.redirect("/docs?deleted=1")
-        }
+      case documents.delete(ctx, id, state.user_actor(user.id)) {
+        Ok(_) -> wisp.redirect("/docs?deleted=1")
         Error(reason) -> wisp.bad_request(reason)
       }
     }
