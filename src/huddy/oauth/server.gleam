@@ -8,6 +8,7 @@ import gleam/crypto
 import gleam/dict
 import gleam/dynamic/decode
 import gleam/http
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -24,6 +25,7 @@ import huddy/sys
 import huddy/web/html
 import huddy/web/layout
 import huddy/web/session
+import logging
 import wisp.{type Request, type Response}
 
 pub const scopes = ["huddy:read", "huddy:write"]
@@ -277,8 +279,16 @@ fn authorize_get(ctx: Ctx, req: Request) -> Response {
     Error(reason) -> error_page(ctx, reason)
     Ok(client) ->
       case list.any(client.redirect_uris, redirect_matches(_, redirect_uri)) {
-        False ->
+        False -> {
+          logging.log(
+            logging.Warning,
+            "oauth authorize: unregistered redirect_uri "
+              <> redirect_uri
+              <> " for "
+              <> client_id,
+          )
           error_page(ctx, "redirect_uri is not registered for this client")
+        }
         True -> {
           let fail = fn(error, description) {
             redirect_with(redirect_uri, [
@@ -329,6 +339,13 @@ fn authorize_get(ctx: Ctx, req: Request) -> Response {
                   Nil,
                 )
               })
+              logging.log(
+                logging.Info,
+                "oauth authorize: consent shown client_id="
+                  <> client_id
+                  <> " redirect_uri="
+                  <> redirect_uri,
+              )
               consent_page(ctx, user, id, request)
             }
           }
@@ -416,11 +433,18 @@ fn authorize_post(ctx: Ctx, req: Request) -> Response {
           }
         })
       case found {
-        None ->
+        None -> {
+          logging.log(
+            logging.Warning,
+            "oauth authorize: unknown or expired request (decision="
+              <> decision
+              <> ")",
+          )
           error_page(
             ctx,
             "This authorization request has expired. Start again from your agent.",
           )
+        }
         Some(r) ->
           case decision {
             "approve" -> {
@@ -437,7 +461,7 @@ fn authorize_post(ctx: Ctx, req: Request) -> Response {
                       code_challenge: r.code_challenge,
                       scope: r.scope,
                       resource: r.resource,
-                      expires_at: now + 60_000,
+                      expires_at: now + 600_000,
                     )
                   store.Changed(
                     s,
@@ -454,12 +478,20 @@ fn authorize_post(ctx: Ctx, req: Request) -> Response {
                   )
                 })
               case issued {
-                Ok(_) ->
+                Ok(_) -> {
+                  logging.log(
+                    logging.Info,
+                    "oauth authorize: approved client_id="
+                      <> r.client_id
+                      <> ", redirecting to "
+                      <> r.redirect_uri,
+                  )
                   redirect_with(r.redirect_uri, [
                     #("code", code),
                     #("state", r.state),
                     #("iss", ctx.config.base_url),
                   ])
+                }
                 Error(e) -> error_page(ctx, e)
               }
             }
@@ -478,6 +510,7 @@ fn authorize_post(ctx: Ctx, req: Request) -> Response {
 // --- token ----------------------------------------------------------------------
 
 fn token_error(error: String, description: String) -> Response {
+  logging.log(logging.Warning, "oauth: " <> error <> ": " <> description)
   json_response(
     json.object([
       #("error", json.string(error)),
@@ -488,8 +521,26 @@ fn token_error(error: String, description: String) -> Response {
 }
 
 pub fn token(ctx: Ctx, req: Request) -> Response {
+  logging.log(
+    logging.Info,
+    "oauth token request: content-type="
+      <> result.unwrap(list.key_find(req.headers, "content-type"), "-"),
+  )
   use form <- wisp.require_form(req)
   let value = session.form_value(form, _)
+  logging.log(
+    logging.Info,
+    "oauth token: grant_type="
+      <> value("grant_type")
+      <> " client_id="
+      <> value("client_id")
+      <> " redirect_uri="
+      <> value("redirect_uri")
+      <> " resource="
+      <> value("resource")
+      <> " verifier_len="
+      <> int.to_string(string.length(value("code_verifier"))),
+  )
   case sys.rate_limit("oauth-ip:" <> session.client_ip(req), 60, 60_000) {
     False -> token_error("slow_down", "too many requests")
     True ->
@@ -544,7 +595,11 @@ fn issue(
       store.Changed(s, e, [], Nil)
     })
   case stored {
-    Ok(_) ->
+    Ok(_) -> {
+      logging.log(
+        logging.Info,
+        "oauth: issued tokens for grant " <> int.to_string(grant_id),
+      )
       json_response(
         json.object([
           #("access_token", json.string(access)),
@@ -555,6 +610,7 @@ fn issue(
         ]),
         200,
       )
+    }
     Error(e) ->
       json_response(
         json.object([
@@ -734,6 +790,15 @@ pub fn register(ctx: Ctx, req: Request) -> Response {
                     store.update(ctx.store, fn(s, e, _) {
                       store.Changed(state.put_client(s, client), e, [], Nil)
                     })
+                  logging.log(
+                    logging.Info,
+                    "oauth register: "
+                      <> client_id
+                      <> " ("
+                      <> client.client_name
+                      <> ") redirect_uris="
+                      <> string.join(uris, ","),
+                  )
                   json_response(
                     json.object([
                       #("client_id", json.string(client_id)),

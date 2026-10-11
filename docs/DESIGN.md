@@ -327,7 +327,7 @@ drops the SQLite NIF and its C toolchain entirely.
 - Ranking is computed from `State` on demand (it is cheap at this scale).
   Reads never touch the disk.
 - **Ephemeral data is not persisted.** Login codes, OAuth authorization codes
-  (60s TTL), pending consent requests, the legacy MCP `clientInfo` cache and
+  (10-minute TTL), pending consent requests, the legacy MCP `clientInfo` cache and
   SSE subscribers live in the store's memory; rate-limit buckets live in an ETS
   table. Losing them on restart costs at most one re-sent login code or one
   repeated OAuth click. It also keeps the hottest write paths off the disk.
