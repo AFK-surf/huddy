@@ -30,15 +30,6 @@ pub fn ensure_dir(dir: String) -> Result(Nil, String)
 @external(erlang, "huddy_ffi", "list_dir")
 pub fn list_dir(dir: String) -> Result(List(String), String)
 
-/// Relative paths of all regular files below `dir`, sorted; a missing
-/// directory is empty.
-@external(erlang, "huddy_ffi", "list_tree")
-pub fn list_tree(dir: String) -> Result(List(String), String)
-
-/// Delete a directory and everything in it; a missing one is fine.
-@external(erlang, "huddy_ffi", "delete_tree")
-pub fn delete_tree(dir: String) -> Result(Nil, String)
-
 @external(erlang, "huddy_ffi", "utc_date_compact")
 pub fn utc_date_compact(ms: Int) -> String
 

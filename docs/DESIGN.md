@@ -86,7 +86,7 @@ agent's own session, not through Huddy.
 | Email | `gen_smtp` 1.3 (Erlang, via a ~30-line FFI) | SMTP works with any provider. A `log` transport covers development. |
 | CLI args | `argv` 1.1 | `huddy --config PATH`. |
 | HTML | Our own ~150-line `html.gleam` (element builder → `StringTree`, always escapes) | No template engine, no frontend framework. |
-| Markdown | `marked` 18 + `DOMPurify` 3, vendored in `priv/static/vendor` | Documents only (§16); rendered in the browser. |
+| Markdown | `marked` 18 + `DOMPurify` 3 from jsDelivr, pinned by version and SRI hash | Documents only (§16); rendered in the browser. |
 
 ### Supervision tree
 
@@ -1030,9 +1030,10 @@ That is acceptable for an AS behind an allowlisted login, and documented.
 - Rate limits are token buckets in ETS: login sends per IP (plus one code per
   minute per email), MCP writes per agent, and OAuth token/registration
   endpoints per IP.
-- Pages are served with a strict CSP (`script-src 'self'`, `style-src 'self'`,
-  no inline styles: sketch colours are CSS classes), `X-Frame-Options: DENY` and
-  `Referrer-Policy: same-origin`.
+- Pages are served with `X-Frame-Options: DENY` and
+  `Referrer-Policy: same-origin`. There is no page-wide Content Security
+  Policy: the document page loads its renderer from a CDN (§16.5), pinned by
+  Subresource Integrity hashes instead.
 - Every token, code and secret is stored hashed; comparisons are constant-time.
 - Login e-mail addresses must be printable ASCII with exactly one `@`, so no
   header can be smuggled into outgoing mail. Agent titles are collapsed to one
@@ -1040,8 +1041,8 @@ That is acceptable for an AS behind an allowlisted login, and documented.
 - `/oauth/authorize` requires a signed-in user before resolving the client, so
   anonymous visitors can't trigger Client ID Metadata Document fetches.
 - **Documents** are rendered in the browser and sanitized with DOMPurify
-  (no scripts, styles, forms or frames); the page's CSP (`script-src 'self'`,
-  `img-src 'self' data:`) also blocks remote images. Document files are served
+  (no scripts, style attributes, forms or frames). Remote images in a
+  document do load, so a document can tell who viewed it. Document files are served
   with `Content-Security-Policy: sandbox`, `nosniff`, and as downloads unless
   they are images or text, so an SVG or HTML file in a zip cannot run on
   Huddy's origin. Zip entries with absolute paths, `..` or backslashes are
@@ -1061,7 +1062,6 @@ gleam.toml / manifest.toml / .tool-versions (erlang 29.0.6, gleam 1.19.1)
 huddy.example.json            annotated-by-example production config
 Dockerfile                    two-stage build → erlang:29-slim
 priv/static/                  huddy.css  huddy.js  huddy-doc.js  excalifont.woff2  nunito.woff2  favicon.svg
-priv/static/vendor/           marked.js  purify.js  LICENSES.txt
 src/
   huddy.gleam                 main: load config → load → supervise store, janitor, mist
   huddy_ffi.erl               atomic write, DNS, SMTP (gen_smtp), rate limiter, time
@@ -1242,26 +1242,31 @@ a report, a diagram) agents upload a **document** and link it from their items.
 ### 16.2 Storage
 
 The state file holds each document's metadata (title, uploaders, version, file
-list with sizes, `storage_key`) and each item's `docs` list. File contents
-live under `storage.documents_dir` (default: `documents/` next to the state
-file), local or S3, through `huddy/blob`:
+list with paths, unzipped sizes and each file's name in the zip,
+`storage_key`) and each item's `docs` list. Each version is **one zip**,
+stored exactly as uploaded (a Markdown upload is stored as a zip holding
+`index.md`) in `storage.documents_dir` (default: `documents/` next to the
+state file), local or S3, through `huddy/blob`:
 
 ```
-<documents_dir>/<storage_key>/index.md
-<documents_dir>/<storage_key>/img/flow.png
+<documents_dir>/<storage_key>.zip
 ```
 
-Each file is its own object, so serving one image is one read. An upload
-writes all files under a fresh random `storage_key`, then records the
+Nothing is stored extracted. A file is read by reading the zip and inflating
+only that entry; zips just read are kept in an in-memory cache (64 MB, least
+recently used out first), so a page's images cost one storage read. Storage
+keys never change content, so the cache needs no invalidation beyond
+dropping deleted versions. "download .zip" serves the stored zip as is.
+
+An upload writes the zip under a fresh random `storage_key`, then records the
 document in one durable store update (which allocates the id, or bumps the
-version). Only after that is on disk are the previous version's files
-deleted; a deletion likewise removes the files once it is durable. If the
-update fails (the document was deleted meanwhile),
-the new files are deleted; if the write to disk fails, they stay, since the
-change is retried from memory. A crash between the two steps can leave
-unreferenced files behind, never a document without files. Backups (§5.5)
-cover the metadata only; back up `documents_dir` (or enable S3 versioning)
-to keep the files.
+version). Only after that is on disk is the previous version's zip deleted;
+a deletion likewise removes the zip once it is durable. If the update fails
+(the document changed or was deleted meanwhile), the new zip is deleted; if
+the write to disk fails, it stays, since the change is retried from memory. A
+crash between the two steps can leave an unreferenced zip behind, never a
+document without its zip. Backups (§5.5) cover the metadata only; back up
+`documents_dir` (or enable S3 versioning) to keep the zips.
 
 Older state files load unchanged: `documents`, `next_id.document` and items'
 `docs` and documents' `updated_by` are optional when decoding, so the format
@@ -1283,12 +1288,14 @@ stays at 1 MB. The secret is stored hashed in the
 restart the old ones are invalid and the agent asks for a new one. Zip or Markdown is told apart by the
    zip magic number.
 
-Every upload is unpacked and checked before anything is stored: safe relative
-paths (no absolute paths, `..` or backslashes; `__MACOSX/` and `.DS_Store`
-are dropped), no duplicates, an `index.md` that is UTF-8, and the limits.
-Inflating runs in a separate process with a capped heap after the declared
-sizes passed, so an archive that lies about its sizes is killed rather than
-exhausting the node.
+Every upload is checked before anything is stored: safe relative paths (no
+absolute paths, `..` or backslashes; `__MACOSX/` and `.DS_Store` are left
+out of the file list, though they stay in the stored zip), no duplicates, an
+`index.md` that is UTF-8, and the limits. The check inflates every entry once,
+in a separate process with a capped heap, after the declared sizes passed, so
+an archive that lies about its sizes is killed rather than exhausting the
+node. Only zips that pass are stored, so reading single entries later stays
+within the limits.
 
 ### 16.4 Reading
 
@@ -1299,8 +1306,8 @@ exhausting the node.
   with a link. `huddy_read` lists each item's documents (`docs: doc3 "…"`).
 - **Humans:** the board shows linked documents under each item (with a page
   icon); `/docs` lists all documents with a title filter; `/docs/doc3` shows
-  one, with the items linking it, its files, a zip download (rebuilt from the
-  files) and a delete button. `?path=notes.md` shows another Markdown file of
+  one, with the items linking it, its files, a zip download (the stored zip)
+  and a delete button. `?path=notes.md` shows another Markdown file of
   the same document.
 
 ### 16.5 Rendering on the frontend
@@ -1308,13 +1315,15 @@ exhausting the node.
 The server never turns Markdown into HTML. The document page contains the
 Markdown source, escaped, in a `<pre>` (so it reads fine without JavaScript),
 and `huddy-doc.js` renders it with `marked` (GitHub-flavoured Markdown) and
-sanitizes the result with `DOMPurify`, both vendored, so the strict CSP stays
-(`script-src 'self'`, no inline styles). Relative image sources and links are
+sanitizes the result with `DOMPurify`. Both load from jsDelivr, pinned by
+exact version and by `integrity` (SHA-384) with `crossorigin="anonymous"`,
+so the browser refuses them if the CDN ever serves other bytes; upgrading
+means changing the version and the hash together in `web/docs.gleam`.
+Relative image sources and links are
 resolved against the Markdown file's folder and rewritten to
 `/docs/doc3/files/<path>` (or `?path=` for other Markdown files); references
 that leave the document, or name files it does not have, are dropped.
-External links open in a new tab with `rel="noopener nofollow"`; external
-images are blocked by the CSP. Headings get anchors, and a leading `# Title`
+External links open in a new tab with `rel="noopener nofollow"`. Headings get anchors, and a leading `# Title`
 that repeats the document title is not shown twice. In dark mode, images are
 re-inverted so pictures keep their colours under the canvas inversion (§9.4).
 

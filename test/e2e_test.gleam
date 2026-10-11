@@ -939,6 +939,12 @@ pub fn documents_flow_test() {
   assert string.contains(list.body, "Design notes")
   let page = get("/docs/doc2")
   assert page.status == 200
+  // the renderer comes from the CDN, pinned by hash
+  assert string.contains(
+    page.body,
+    "src=\"https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.umd.js\" defer=\"\" integrity=\"sha384-",
+  )
+  assert header(page, "content-security-policy") == ""
   assert string.contains(page.body, "id=\"doc-src\"")
   assert string.contains(page.body, "![arch](img/arch.png)")
   assert string.contains(page.body, "/static/huddy-doc.js")
@@ -954,7 +960,8 @@ pub fn documents_flow_test() {
   let download = get_bits(base(ctx) <> "/docs/doc2/download", cookie)
   assert download.status == 200
   assert response.get_header(download, "content-type") == Ok("application/zip")
-  let assert <<"PK":utf8, _:bytes>> = download.body
+  // the stored zip, exactly as uploaded
+  assert download.body == zip
   // documents need a signed-in user
   let anonymous =
     send(http.Get, base(ctx) <> "/docs/doc2/files/img/arch.png", [], "")
@@ -977,9 +984,10 @@ pub fn documents_flow_test() {
   let resp = rpc(alice, [], call("huddy_read", json.object([])))
   assert !string.contains(tool_text(resp), "doc2")
   process.sleep(200)
-  // only doc1's current version is left: its v1, doc2 and doc3 are gone
-  let assert Ok([left]) = blob.list_tree(ctx.config.storage.documents_dir)
-  assert string.ends_with(left, "/index.md")
+  // one zip per version: only doc1's current one is left (its revision 1,
+  // doc2 and doc3 are gone)
+  let assert Ok([left]) = blob.list_dir(ctx.config.storage.documents_dir)
+  assert string.ends_with(left, ".zip")
 }
 
 /// Upload a document the only way agents can: ask huddy_doc_upload for a

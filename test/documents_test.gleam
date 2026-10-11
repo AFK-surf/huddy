@@ -25,31 +25,39 @@ fn zip(files: List(#(String, String))) -> BitArray {
   bits
 }
 
-fn paths(files: List(#(String, BitArray))) -> List(String) {
-  list.map(files, fn(f) { f.0 })
+fn paths(unpacked: documents.Unpacked) -> List(String) {
+  list.map(unpacked.files, fn(f) { f.path })
 }
 
 // --- unpacking -------------------------------------------------------------------
 
 pub fn markdown_becomes_index_test() {
-  let assert Ok([#("index.md", bits)]) =
+  let assert Ok(documents.Unpacked(zip:, files: [file])) =
     documents.unpack(documents.Markdown("# Hello\n"), 1000)
-  assert bits == <<"# Hello\n":utf8>>
+  assert file
+    == documents.UnpackedFile("index.md", "index.md", <<"# Hello\n":utf8>>)
+  // stored as a zip holding it
+  let assert Ok(documents.Unpacked(files: [again], ..)) =
+    documents.unpack(documents.Zip(zip), 1000)
+  assert again == file
 }
 
 pub fn zip_with_images_test() {
-  let upload =
-    documents.Zip(
-      zip([
-        #("index.md", "# Plan\n![arch](img/arch.png)"),
-        #("img/arch.png", "PNG"),
-        #("./notes/extra.md", "more"),
-        #("__MACOSX/._index.md", "junk"),
-        #("img/.DS_Store", "junk"),
-      ]),
-    )
-  let assert Ok(files) = documents.unpack(upload, 10_000)
-  assert paths(files) == ["img/arch.png", "index.md", "notes/extra.md"]
+  let raw =
+    zip([
+      #("index.md", "# Plan\n![arch](img/arch.png)"),
+      #("img/arch.png", "PNG"),
+      #("./notes/extra.md", "more"),
+      #("__MACOSX/._index.md", "junk"),
+      #("img/.DS_Store", "junk"),
+    ])
+  let assert Ok(unpacked) = documents.unpack(documents.Zip(raw), 10_000)
+  assert paths(unpacked) == ["img/arch.png", "index.md", "notes/extra.md"]
+  // the zip is kept as uploaded, junk and all
+  assert unpacked.zip == raw
+  let assert Ok(extra) =
+    list.find(unpacked.files, fn(f) { f.path == "notes/extra.md" })
+  assert extra.entry == "./notes/extra.md"
 }
 
 pub fn zip_of_a_folder_is_accepted_test() {
@@ -57,8 +65,10 @@ pub fn zip_of_a_folder_is_accepted_test() {
     documents.Zip(
       zip([#("my-doc/index.md", "# Doc"), #("my-doc/img/a.png", "PNG")]),
     )
-  let assert Ok(files) = documents.unpack(upload, 10_000)
-  assert paths(files) == ["img/a.png", "index.md"]
+  let assert Ok(unpacked) = documents.unpack(upload, 10_000)
+  assert paths(unpacked) == ["img/a.png", "index.md"]
+  assert list.map(unpacked.files, fn(f) { f.entry })
+    == ["my-doc/img/a.png", "my-doc/index.md"]
 }
 
 pub fn zip_without_index_is_rejected_test() {
@@ -122,7 +132,10 @@ fn at(id: Int, revision: Int) -> model.DocRevision {
 fn new_doc(title: String, replaces) -> state.NewDocument {
   state.NewDocument(
     title:,
-    files: [model.DocFile("index.md", 10), model.DocFile("img/a.png", 5)],
+    files: [
+      model.DocFile("index.md", 10, "index.md"),
+      model.DocFile("img/a.png", 5, "img/a.png"),
+    ],
     storage_key: "key-" <> title,
     replaces:,
   )
@@ -253,20 +266,6 @@ pub fn files_written_before_documents_existed_still_load_test() {
     persist.decode_file(bit_array.from_string(text), "old")
   assert dict.is_empty(loaded.documents)
   assert loaded.next_id.document == 1
-}
-
-// --- storage ---------------------------------------------------------------------
-
-pub fn local_trees_test() {
-  let dir = blob.File(support.tmp_dir() <> "/documents/k1")
-  assert blob.list_tree(dir) == Ok([])
-  let assert Ok(_) = blob.write(blob.child(dir, "index.md"), <<"# x":utf8>>)
-  let assert Ok(_) = blob.write(blob.child(dir, "img/deep/a.png"), <<1, 2>>)
-  assert blob.list_tree(dir) == Ok(["img/deep/a.png", "index.md"])
-  assert blob.read(blob.child(dir, "img/deep/a.png")) == Ok(<<1, 2>>)
-  let assert Ok(_) = blob.delete_tree(dir)
-  assert blob.list_tree(dir) == Ok([])
-  assert blob.delete_tree(dir) == Ok(Nil)
 }
 
 // --- one actor per document -----------------------------------------------------

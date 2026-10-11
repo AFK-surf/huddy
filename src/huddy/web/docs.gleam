@@ -72,11 +72,49 @@ fn with_doc(
 
 // --- pages ---------------------------------------------------------------------
 
-fn shell(ctx: Ctx, title: String, scripts: List(String), body: List(Node)) {
+/// A script, with the Subresource Integrity hash of a third-party one.
+type Script {
+  Script(src: String, integrity: Option(String))
+}
+
+// The Markdown renderer and sanitizer, from jsDelivr, pinned by version and
+// by hash: the browser refuses them if the CDN serves other bytes.
+const marked =
+  Script(
+    "https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.umd.js",
+    Some(
+      "sha384-2vpGtuKqJvFlwJqYnf/wUMuzUfhUnYBt9oay0e2yaFcq0Dh6/aEbQ8YAOeKGzlYo",
+    ),
+  )
+
+const dompurify =
+  Script(
+    "https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js",
+    Some(
+      "sha384-uUMu9JDY09vBzRf9SPcK2VgUj+W/70J6Soc+Dded5P474ElQ63iv9j5N3DE7Kp3N",
+    ),
+  )
+
+fn shell(ctx: Ctx, title: String, scripts: List(Script), body: List(Node)) {
   html.document(
     title <> " · Huddy",
-    list.map(scripts, fn(src) {
-      html.el("script", [#("src", src), #("defer", "")], [])
+    list.map(scripts, fn(script) {
+      html.el(
+        "script",
+        [
+          #("src", script.src),
+          #("defer", ""),
+          ..case script.integrity {
+            Some(hash) -> [
+              #("integrity", hash),
+              #("crossorigin", "anonymous"),
+              #("referrerpolicy", "no-referrer"),
+            ]
+            None -> []
+          }
+        ],
+        [],
+      )
     }),
     [
       html.div([html.class("page")], [
@@ -249,10 +287,7 @@ fn show(
         shell(
           ctx,
           doc.title,
-          [
-            "/static/vendor/marked.js", "/static/vendor/purify.js",
-            "/static/huddy-doc.js",
-          ],
+          [marked, dompurify, Script("/static/huddy-doc.js", None)],
           [
             html.el("article", [html.class("doc")], [
               html.div([html.class("dochead")], [

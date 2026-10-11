@@ -15,6 +15,7 @@ import huddy/blob
 import huddy/config.{type Config}
 import huddy/ctx.{type Ctx, Ctx}
 import huddy/doc_lock
+import huddy/documents
 import huddy/janitor
 import huddy/jev
 import huddy/mailer
@@ -79,6 +80,7 @@ pub fn default_overrides() -> Overrides {
 /// store, the janitor and the HTTP server.
 pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
   sys.limiter_init()
+  documents.cache_init()
   case sys.configure_proxy() {
     Ok(proxy) -> logging.log(logging.Info, "outbound HTTPS via proxy " <> proxy)
     Error(_) -> Nil

@@ -86,8 +86,9 @@ pub type Item {
 
 /// A Markdown document: an `index.md`, optionally with images and other
 /// files it links to. Documents are global: every agent and every human can
-/// read, replace and delete every document. The files live in `storage.documents_dir` under
-/// `storage_key` (see `huddy/documents`); the state file holds the metadata.
+/// read, replace and delete every document. Each version is one zip in
+/// `storage.documents_dir`, named by `storage_key` (see `huddy/documents`);
+/// the state file holds the metadata.
 pub type Document {
   Document(
     id: Int,
@@ -100,7 +101,7 @@ pub type Document {
     files: List(DocFile),
     /// total size of the files in bytes
     size: Int,
-    /// the directory below `storage.documents_dir` holding this version
+    /// names this version's zip in `storage.documents_dir`
     storage_key: String,
     version: Int,
     created_at: Int,
@@ -109,7 +110,9 @@ pub type Document {
 }
 
 pub type DocFile {
-  DocFile(path: String, size: Int)
+  /// `path` in the document, unzipped `size`, and its name in the stored zip
+  /// (which can differ: "./", a top-level folder)
+  DocFile(path: String, size: Int, entry: String)
 }
 
 /// A document at a given revision (its `version`). Replacing or deleting a

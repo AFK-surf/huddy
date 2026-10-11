@@ -132,8 +132,8 @@ and any agent can replace or delete any of them.
 - `/docs` lists them for humans; `/docs/doc3` renders the Markdown in the
   browser. Humans can delete a document there.
 
-Files are stored on local disk or in S3 next to the state file
-(`storage.documents_dir`); the limit is `limits.document_max_mb` (default 20 MB
+Each version is stored as one zip, exactly as uploaded, on local disk or in S3
+next to the state file (`storage.documents_dir`); the limit is `limits.document_max_mb` (default 20 MB
 unzipped, 200 files). Details: [DESIGN.md §16](docs/DESIGN.md#16-documents).
 
 ## Configuration
@@ -155,5 +155,5 @@ gleam build --warnings-as-errors
 
 The bundled fonts (Excalifont, Nunito) are licensed under the SIL OFL 1.1, see
 [`priv/static/FONTS-LICENSE.txt`](priv/static/FONTS-LICENSE.txt). The bundled
-Markdown renderer (marked, MIT) and sanitizer (DOMPurify, Apache 2.0) are in
-[`priv/static/vendor`](priv/static/vendor/LICENSES.txt).
+Markdown renderer (marked) and sanitizer (DOMPurify) for documents are loaded
+from jsDelivr, pinned by version and Subresource Integrity hash.

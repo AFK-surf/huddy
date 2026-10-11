@@ -191,6 +191,7 @@ pub fn encode_document(d: Document) -> Json {
         json.object([
           #("path", json.string(f.path)),
           #("size", json.int(f.size)),
+          #("entry", json.string(f.entry)),
         ])
       }),
     ),
@@ -518,7 +519,8 @@ pub fn document_decoder() -> Decoder(Document) {
     decode.list({
       use path <- decode.field("path", decode.string)
       use size <- decode.field("size", decode.int)
-      decode.success(DocFile(path:, size:))
+      use entry <- decode.optional_field("entry", path, decode.string)
+      decode.success(DocFile(path:, size:, entry:))
     }),
   )
   use size <- decode.field("size", decode.int)

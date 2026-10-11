@@ -4,8 +4,9 @@
 -include_lib("stdlib/include/zip.hrl").
 
 -export([now_ms/0, os_pid/0, getenv/1, atomic_write/2, read_file/1, delete_file/1,
-         file_exists/1, ensure_dir/1, list_dir/1, list_tree/1, delete_tree/1,
-         zip_extract/3, zip_create/1,
+         file_exists/1, ensure_dir/1, list_dir/1,
+         zip_extract/3, zip_create/1, zip_read/2,
+         zip_cache_init/0, zip_cache_get/1, zip_cache_put/3, zip_cache_delete/1,
          utc_date_compact/1, amz_date/1, rfc2822_date/1, getaddrs/1, send_email/5,
          limiter_init/0, rate_take/4, halt/1, rescue/1,
          configure_proxy/0]).
@@ -72,41 +73,6 @@ ensure_dir(Dir) ->
 list_dir(Dir) ->
     case file:list_dir(Dir) of
         {ok, Names} -> {ok, [unicode:characters_to_binary(N) || N <- Names]};
-        {error, Reason} -> {error, reason_to_binary(Reason)}
-    end.
-
-%% Relative paths of the regular files below Dir (symlinks are skipped).
-list_tree(Dir) ->
-    case file:read_link_info(Dir) of
-        {error, enoent} -> {ok, []};
-        {error, Reason} -> {error, reason_to_binary(Reason)};
-        {ok, _} ->
-            try {ok, lists:sort(walk(Dir, <<>>))}
-            catch throw:{walk, Reason} -> {error, reason_to_binary(Reason)}
-            end
-    end.
-
-walk(Dir, Prefix) ->
-    Names = case file:list_dir(Dir) of
-                {ok, N} -> N;
-                {error, R} -> throw({walk, R})
-            end,
-    lists:flatmap(
-      fun(Name0) ->
-              Name = unicode:characters_to_binary(Name0),
-              Full = filename:join(Dir, Name),
-              Rel = case Prefix of <<>> -> Name; _ -> <<Prefix/binary, "/", Name/binary>> end,
-              case file:read_link_info(Full) of
-                  {ok, #file_info{type = directory}} -> walk(Full, Rel);
-                  {ok, #file_info{type = regular}} -> [Rel];
-                  _ -> []
-              end
-      end, Names).
-
-delete_tree(Dir) ->
-    case file:del_dir_r(Dir) of
-        ok -> {ok, nil};
-        {error, enoent} -> {ok, nil};
         {error, Reason} -> {error, reason_to_binary(Reason)}
     end.
 
@@ -180,6 +146,64 @@ unzip_capped(Bin, MaxBytes) ->
             erlang:demonitor(Mon, [flush]),
             {error, <<"too_large">>}
     end.
+
+%% One entry of a zip archive held in memory, by its name in the archive.
+%% Archives are checked by zip_extract/3 before they are stored, so names
+%% are safe and sizes are within limits.
+zip_read(Zip, Name) ->
+    try zip:unzip(Zip, [memory, {file_list, [unicode:characters_to_list(Name)]}]) of
+        {ok, [{_, Data}]} -> {ok, Data};
+        {ok, []} -> {error, <<"enoent">>};
+        {error, Reason} -> {error, reason_to_binary(Reason)}
+    catch Class:Reason -> {error, reason_to_binary({Class, Reason})}
+    end.
+
+%% A cache of recently read document zips, so that serving the images of a
+%% page reads its zip from storage once. Keys are storage keys, which never
+%% change content. The table belongs to a process of its own, so it outlives
+%% whoever created it.
+zip_cache_init() ->
+    case ets:info(huddy_zip_cache) of
+        undefined ->
+            Parent = self(),
+            spawn(fun() ->
+                          ets:new(huddy_zip_cache, [named_table, public, set]),
+                          Parent ! huddy_zip_cache_ready,
+                          receive after infinity -> ok end
+                  end),
+            receive huddy_zip_cache_ready -> nil after 5000 -> nil end;
+        _ -> nil
+    end.
+
+zip_cache_get(Key) ->
+    try ets:lookup(huddy_zip_cache, Key) of
+        [{_, Zip, _}] ->
+            ets:update_element(huddy_zip_cache, Key, {3, erlang:monotonic_time()}),
+            {ok, Zip};
+        [] -> {error, nil}
+    catch error:badarg -> {error, nil}
+    end.
+
+%% Insert, then evict the least recently used zips until the cache holds at
+%% most MaxBytes.
+zip_cache_put(Key, Zip, MaxBytes) ->
+    try
+        ets:insert(huddy_zip_cache, {Key, Zip, erlang:monotonic_time()}),
+        Entries = lists:keysort(3, ets:tab2list(huddy_zip_cache)),
+        Total = lists:sum([byte_size(Z) || {_, Z, _} <- Entries]),
+        evict(Entries, Total, MaxBytes)
+    catch error:badarg -> ok
+    end,
+    nil.
+
+evict([{Key, Zip, _} | Rest], Total, Max) when Total > Max ->
+    ets:delete(huddy_zip_cache, Key),
+    evict(Rest, Total - byte_size(Zip), Max);
+evict(_, _, _) -> ok.
+
+zip_cache_delete(Key) ->
+    try ets:delete(huddy_zip_cache, Key) catch error:badarg -> ok end,
+    nil.
 
 %% A zip archive (in memory) holding the given [{Path, Data}] files.
 zip_create(Files) ->

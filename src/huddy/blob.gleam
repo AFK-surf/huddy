@@ -125,38 +125,6 @@ pub fn ensure_dir(dir: Location) -> Result(Nil, String) {
   }
 }
 
-/// Delete `dir` and everything below it. A missing directory is fine.
-pub fn delete_tree(dir: Location) -> Result(Nil, String) {
-  case dir {
-    File(path) -> sys.delete_tree(path)
-    Object(..) -> {
-      use paths <- result.try(list_tree(dir))
-      list.try_each(paths, fn(p) { delete(child(dir, p)) })
-    }
-  }
-}
-
-/// Paths (relative, "/"-separated) of all files below `dir`, at any depth,
-/// sorted. A missing directory is empty.
-pub fn list_tree(dir: Location) -> Result(List(String), String) {
-  case dir {
-    File(path) -> sys.list_tree(path)
-    Object(s3:, bucket:, key:) -> {
-      let prefix = case key {
-        "" -> ""
-        _ -> key <> "/"
-      }
-      s3.list(s3, bucket, prefix)
-      |> result.map(fn(keys) {
-        keys
-        |> list.map(string.drop_start(_, string.length(prefix)))
-        |> list.filter(fn(p) { p != "" && !string.ends_with(p, "/") })
-        |> list.sort(string.compare)
-      })
-    }
-  }
-}
-
 /// The media type for a file name, by extension. Unknown types are
 /// `application/octet-stream`.
 pub fn content_type(name: String) -> String {

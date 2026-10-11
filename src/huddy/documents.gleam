@@ -3,12 +3,14 @@
 ////
 //// An upload is a zip archive with `index.md` at its root (or inside a single
 //// top-level folder), plus any images and other files `index.md` links to;
-//// plain Markdown is accepted as a document with only `index.md`. Each file
-//// is stored on its own through `huddy/blob` (local disk or S3), under
-//// `storage.documents_dir/<storage_key>/<path>`, so serving one image is one
-//// read. The state file holds the metadata (`model.Document`). A new version
-//// gets a fresh storage key; the old version's files are deleted once the
-//// state change is durable.
+//// plain Markdown is accepted as a document with only `index.md`. The zip is
+//// checked, then stored as uploaded, one object per version, through
+//// `huddy/blob` (local disk or S3) at `storage.documents_dir/<storage_key>.zip`
+//// (Markdown is stored as a zip holding it). Files are read out of the zip
+//// on demand; recently read zips are cached in memory. The state file holds
+//// the metadata (`model.Document`), including each file's name in the zip.
+//// A new version gets a fresh storage key; the old version's zip is deleted
+//// once the state change is durable.
 
 import gleam/bit_array
 import gleam/erlang/process
@@ -64,19 +66,50 @@ fn zip_extract(
 @external(erlang, "huddy_ffi", "zip_create")
 fn zip_create(files: List(#(String, BitArray))) -> Result(BitArray, String)
 
+@external(erlang, "huddy_ffi", "zip_read")
+fn zip_read(zip: BitArray, entry: String) -> Result(BitArray, String)
+
+@external(erlang, "huddy_ffi", "zip_cache_init")
+pub fn cache_init() -> Nil
+
+@external(erlang, "huddy_ffi", "zip_cache_get")
+fn cache_get(storage_key: String) -> Result(BitArray, Nil)
+
+@external(erlang, "huddy_ffi", "zip_cache_put")
+fn cache_put(storage_key: String, zip: BitArray, max_bytes: Int) -> Nil
+
+@external(erlang, "huddy_ffi", "zip_cache_delete")
+fn cache_delete(storage_key: String) -> Nil
+
+/// The zip cache holds at most this much.
+const cache_bytes = 67_108_864
+
+/// A checked upload: the zip to store, and its files.
+pub type Unpacked {
+  Unpacked(zip: BitArray, files: List(UnpackedFile))
+}
+
+pub type UnpackedFile {
+  /// `path` is the file's path in the document; `entry` its name in the zip
+  UnpackedFile(path: String, entry: String, data: BitArray)
+}
+
 /// Unpack and check an upload: safe relative paths, no duplicates, an
 /// `index.md` that is UTF-8, within the size and file-count limits. Returns
-/// the files sorted by path.
-pub fn unpack(
-  upload: Upload,
-  max_bytes: Int,
-) -> Result(List(#(String, BitArray)), String) {
+/// the zip to store (the upload itself, or for Markdown a zip holding it)
+/// and the files, sorted by path.
+pub fn unpack(upload: Upload, max_bytes: Int) -> Result(Unpacked, String) {
   let too_large =
     "The document is larger than "
     <> int.to_string(max_bytes / 1_048_576)
     <> " MB unzipped."
-  use entries <- result.try(case upload {
-    Markdown(text) -> Ok([#("index.md", bit_array.from_string(text))])
+  use #(zip, entries) <- result.try(case upload {
+    Markdown(text) -> {
+      let index = [#("index.md", bit_array.from_string(text))]
+      zip_create(index)
+      |> result.map(fn(zip) { #(zip, index) })
+      |> result.replace_error("Could not pack the document.")
+    }
     Zip(bits) ->
       zip_extract(bits, max_files, max_bytes)
       |> result.map_error(fn(reason) {
@@ -90,19 +123,20 @@ pub fn unpack(
           _ -> "The upload is not a valid zip archive."
         }
       })
+      |> result.map(fn(entries) { #(bits, entries) })
   })
   use entries <- result.try(
     entries
     |> list.filter(fn(e) { !is_junk(e.0) })
     |> list.try_map(fn(e) {
       case normalize_path(e.0) {
-        Ok(path) -> Ok(#(path, e.1))
+        Ok(path) -> Ok(UnpackedFile(path:, entry: e.0, data: e.1))
         Error(_) -> Error(unsafe_name(e.0))
       }
     }),
   )
   let entries = strip_common_folder(entries)
-  let paths = list.map(entries, fn(e) { e.0 })
+  let paths = list.map(entries, fn(e) { e.path })
   use _ <- result.try(
     case list.length(list.unique(paths)) == list.length(paths) {
       True -> Ok(Nil)
@@ -110,22 +144,25 @@ pub fn unpack(
     },
   )
   use _ <- result.try(
-    case list.fold(entries, 0, fn(n, e) { n + bit_array.byte_size(e.1) }) {
+    case list.fold(entries, 0, fn(n, e) { n + bit_array.byte_size(e.data) }) {
       n if n > max_bytes -> Error(too_large)
       _ -> Ok(Nil)
     },
   )
   use index <- result.try(
-    list.key_find(entries, "index.md")
+    list.find(entries, fn(e) { e.path == "index.md" })
     |> result.replace_error(
       "The document has no index.md at the root of the zip archive.",
     ),
   )
-  use _ <- result.try(case bit_array.to_string(index) {
+  use _ <- result.try(case bit_array.to_string(index.data) {
     Ok(_) -> Ok(Nil)
     Error(_) -> Error("index.md is not valid UTF-8.")
   })
-  Ok(list.sort(entries, fn(a, b) { string.compare(a.0, b.0) }))
+  Ok(Unpacked(
+    zip:,
+    files: list.sort(entries, fn(a, b) { string.compare(a.path, b.path) }),
+  ))
 }
 
 fn unsafe_name(name: String) -> String {
@@ -169,26 +206,28 @@ pub fn normalize_path(name: String) -> Result(String, Nil) {
 
 /// `zip -r doc.zip doc/` puts everything under `doc/`: accept that when
 /// there is no root index.md but `doc/index.md` exists.
-fn strip_common_folder(
-  entries: List(#(String, BitArray)),
-) -> List(#(String, BitArray)) {
+fn strip_common_folder(entries: List(UnpackedFile)) -> List(UnpackedFile) {
+  let has = fn(path) { list.any(entries, fn(e) { e.path == path }) }
   let folders =
     entries
     |> list.map(fn(e) {
-      case string.split_once(e.0, "/") {
+      case string.split_once(e.path, "/") {
         Ok(#(folder, _)) -> Ok(folder)
         Error(_) -> Error(Nil)
       }
     })
     |> list.unique
-  case list.key_find(entries, "index.md"), folders {
-    Error(_), [Ok(folder)] ->
-      case list.key_find(entries, folder <> "/index.md") {
-        Ok(_) ->
+  case has("index.md"), folders {
+    False, [Ok(folder)] ->
+      case has(folder <> "/index.md") {
+        True ->
           list.map(entries, fn(e) {
-            #(string.drop_start(e.0, string.length(folder) + 1), e.1)
+            UnpackedFile(
+              ..e,
+              path: string.drop_start(e.path, string.length(folder) + 1),
+            )
           })
-        Error(_) -> entries
+        False -> entries
       }
     _, _ -> entries
   }
@@ -222,39 +261,22 @@ pub fn one_line(text: String) -> String {
   |> string.join(" ")
 }
 
-fn location(ctx: Ctx, storage_key: String, path: String) -> Location {
-  blob.child(blob.child(ctx.config.storage.documents_dir, storage_key), path)
+fn location(ctx: Ctx, storage_key: String) -> Location {
+  blob.child(ctx.config.storage.documents_dir, storage_key <> ".zip")
 }
 
-/// Write the files under a fresh storage key. On failure, whatever was
-/// written is removed.
-fn store_files(
-  ctx: Ctx,
-  files: List(#(String, BitArray)),
-) -> Result(String, String) {
-  let key = sys.random_token(12)
-  case
-    list.try_each(files, fn(f) { blob.write(location(ctx, key, f.0), f.1) })
-  {
-    Ok(_) -> Ok(key)
-    Error(reason) -> {
-      discard(ctx, key)
-      Error("Could not store the document: " <> reason)
-    }
-  }
-}
-
-/// Delete one version's files in the background.
+/// Delete one version's zip in the background.
 pub fn discard(ctx: Ctx, storage_key: String) -> Nil {
-  let dir = blob.child(ctx.config.storage.documents_dir, storage_key)
+  cache_delete(storage_key)
+  let zip = location(ctx, storage_key)
   process.spawn_unlinked(fn() {
-    case blob.delete_tree(dir) {
+    case blob.delete(zip) {
       Ok(_) -> Nil
       Error(reason) ->
         logging.log(
           logging.Warning,
           "documents: could not delete "
-            <> blob.to_string(dir)
+            <> blob.to_string(zip)
             <> ": "
             <> reason,
         )
@@ -278,9 +300,9 @@ pub fn upload(
   title: Option(String),
   replaces: Option(DocRevision),
 ) -> Result(Document, String) {
-  use files <- result.try(unpack(upload, max_bytes(ctx)))
+  use unpacked <- result.try(unpack(upload, max_bytes(ctx)))
   case replaces {
-    None -> store_version(ctx, agent_id, files, title, None)
+    None -> store_version(ctx, agent_id, unpacked, title, None)
     Some(at) ->
       doc_lock.run(ctx.doc_locks, at.id, lock_timeout_ms, fn() {
         // refuse a stale revision before writing any files; put_document
@@ -288,7 +310,7 @@ pub fn upload(
         use _ <- result.try(
           store.read(ctx.store, fn(s, _) { state.check_revision(s, at) }),
         )
-        store_version(ctx, agent_id, files, title, Some(at))
+        store_version(ctx, agent_id, unpacked, title, Some(at))
       })
       |> result.flatten
   }
@@ -297,14 +319,14 @@ pub fn upload(
 fn store_version(
   ctx: Ctx,
   agent_id: Int,
-  files: List(#(String, BitArray)),
+  unpacked: Unpacked,
   title: Option(String),
   replaces: Option(DocRevision),
 ) -> Result(Document, String) {
   let limit = ctx.config.limits.title_max_chars
   let index =
-    list.key_find(files, "index.md")
-    |> result.try(bit_array.to_string)
+    list.find(unpacked.files, fn(f) { f.path == "index.md" })
+    |> result.try(fn(f) { bit_array.to_string(f.data) })
     |> result.unwrap("")
   let previous_title =
     option.then(replaces, fn(at) {
@@ -338,9 +360,17 @@ fn store_version(
         False -> Ok(t)
       }
   })
-  use key <- result.try(store_files(ctx, files))
+  let key = sys.random_token(12)
+  use _ <- result.try(
+    blob.write(location(ctx, key), unpacked.zip)
+    |> result.map_error(fn(reason) {
+      "Could not store the document: " <> reason
+    }),
+  )
   let doc_files =
-    list.map(files, fn(f) { DocFile(path: f.0, size: bit_array.byte_size(f.1)) })
+    list.map(unpacked.files, fn(f) {
+      DocFile(path: f.path, size: bit_array.byte_size(f.data), entry: f.entry)
+    })
   let stored =
     store.update(ctx.store, fn(s, e, now) {
       case
@@ -369,7 +399,7 @@ fn store_version(
     }
     Error(reason) -> {
       // a storage error keeps the change in memory (it is retried), so the
-      // files must stay; anything else never referenced them
+      // zip must stay; anything else never referenced it
       case string.starts_with(reason, "storage") {
         True -> Nil
         False -> discard(ctx, key)
@@ -405,26 +435,31 @@ pub fn delete(
   |> result.flatten
 }
 
-/// One file of a document, if the document has it.
+/// The stored zip of the document's current version.
+pub fn zip(ctx: Ctx, doc: Document) -> Result(BitArray, String) {
+  case cache_get(doc.storage_key) {
+    Ok(zip) -> Ok(zip)
+    Error(_) -> {
+      use zip <- result.try(blob.read(location(ctx, doc.storage_key)))
+      cache_put(doc.storage_key, zip, cache_bytes)
+      Ok(zip)
+    }
+  }
+}
+
+/// One file of a document, if the document has it, read out of its zip.
 pub fn read_file(
   ctx: Ctx,
   doc: Document,
   path: String,
 ) -> Result(BitArray, String) {
-  case list.any(doc.files, fn(f) { f.path == path }) {
-    False -> Error("enoent")
-    True -> blob.read(location(ctx, doc.storage_key, path))
+  case list.find(doc.files, fn(f) { f.path == path }) {
+    Error(_) -> Error("enoent")
+    Ok(file) -> {
+      use zip <- result.try(zip(ctx, doc))
+      zip_read(zip, file.entry)
+    }
   }
-}
-
-/// The document as a zip archive, rebuilt from its files.
-pub fn zip(ctx: Ctx, doc: Document) -> Result(BitArray, String) {
-  use files <- result.try(
-    list.try_map(doc.files, fn(f) {
-      read_file(ctx, doc, f.path) |> result.map(fn(bits) { #(f.path, bits) })
-    }),
-  )
-  zip_create(files)
 }
 
 /// Is this file text an agent can read as-is?
