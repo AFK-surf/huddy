@@ -335,8 +335,9 @@ drops the SQLite NIF and its C toolchain entirely.
 - Ranking is computed from `State` on demand (it is cheap at this scale).
   Reads never touch the disk.
 - **Ephemeral data is not persisted.** Login codes, OAuth authorization codes
-  (10-minute TTL), pending consent requests, the legacy MCP `clientInfo` cache and
-  SSE subscribers live in the store's memory; rate-limit buckets live in an ETS
+  (10-minute TTL), pending consent requests, the legacy MCP `clientInfo` cache,
+  one-time document upload URLs (§16.3) and SSE subscribers live in the
+  store's memory; rate-limit buckets live in an ETS
   table. Losing them on restart costs at most one re-sent login code or one
   repeated OAuth click. It also keeps the hottest write paths off the disk.
 - Timestamps are unix milliseconds. Tokens and secrets are stored **only as
@@ -1278,7 +1279,8 @@ it with `curl --data-binary`, straight from disk. The MCP request body limit
 stays at 1 MB. The secret is stored hashed in the
    store's ephemeral memory, belongs to the agent that asked for it (the owner
    is re-checked against the allowlist when it is used), works once, and can
-   be retried after a rejected upload. Zip or Markdown is told apart by the
+   be retried after a rejected upload. Upload URLs are never persisted: after a
+restart the old ones are invalid and the agent asks for a new one. Zip or Markdown is told apart by the
    zip magic number.
 
 Every upload is unpacked and checked before anything is stored: safe relative
