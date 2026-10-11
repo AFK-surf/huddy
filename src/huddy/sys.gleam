@@ -78,6 +78,21 @@ pub fn halt(code: Int) -> Nil
 @external(erlang, "huddy_ffi", "rescue")
 pub fn rescue(f: fn() -> a) -> Result(a, String)
 
+/// An exception caught by `capture`, with its stacktrace.
+pub type Crash
+
+/// Run `f`, keeping any exception so another process can `reraise` it.
+@external(erlang, "huddy_ffi", "capture")
+pub fn capture(f: fn() -> a) -> Result(a, Crash)
+
+/// Raise a captured exception again, in the calling process.
+@external(erlang, "huddy_ffi", "reraise")
+pub fn reraise(crash: Crash) -> a
+
+/// A captured exception, for a log line.
+@external(erlang, "huddy_ffi", "describe_crash")
+pub fn describe_crash(crash: Crash) -> String
+
 /// Take one token from the bucket `key`, which holds `capacity` tokens and
 /// refills completely every `period_ms`. Returns False when rate limited.
 pub fn rate_limit(key: String, capacity: Int, period_ms: Int) -> Bool {

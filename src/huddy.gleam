@@ -134,11 +134,12 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(
     supervision.worker(fn() {
-      // (Re)load from storage on every (re)start of the store.
-      case persist.load(storage.path, storage.backup_dir) {
-        Ok(state) -> store.start(cfg, state, store_name)
-        Error(e) -> Error(actor.InitFailed(e))
-      }
+      // The store (re)loads the state on every (re)start, in the background.
+      store.start(
+        cfg,
+        fn() { persist.load(storage.path, storage.backup_dir) },
+        store_name,
+      )
     }),
   )
   |> supervisor.add(supervision.worker(fn() { doc_lock.start(locks_name) }))
