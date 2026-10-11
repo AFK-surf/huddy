@@ -548,6 +548,91 @@ fn delete(
   }
 }
 
+// --- download URL ------------------------------------------------------------------
+
+/// `GET /docs/download/<secret>`: the zip of the revision the link was
+/// issued for. The link works once and only for 15 minutes; if the document
+/// has changed or been deleted since, it is gone (410).
+pub fn download_link(
+  ctx: Ctx,
+  req: Request(mist.Connection),
+  secret: String,
+) -> Response(mist.ResponseData) {
+  case req.method {
+    http.Get -> serve_download(ctx, secret)
+    _ ->
+      response.new(405)
+      |> response.set_header("allow", "GET")
+      |> response.set_body(mist.Bytes(bytes_tree.new()))
+  }
+}
+
+fn serve_download(ctx: Ctx, secret: String) -> Response(mist.ResponseData) {
+  let sha = sys.sha256_hex(secret)
+  let now = sys.now_ms()
+  // take the link, so it works once
+  let link =
+    store.update_lazy(ctx.store, fn(s, e, _) {
+      case dict.get(e.doc_downloads, sha) {
+        Ok(d) ->
+          store.EphemeralChanged(
+            Ephemeral(..e, doc_downloads: dict.delete(e.doc_downloads, sha)),
+            Some(#(d, state.user(s, d.user), state.get_document(s, d.doc.id))),
+          )
+        Error(_) -> store.NoChange(None)
+      }
+    })
+  case link {
+    Some(#(d, Some(user), doc)) if d.expires_at > now ->
+      case config.email_allowed(ctx.config, user.email), doc {
+        False, _ ->
+          reply(404, [#("error", json.string("unknown or expired link"))])
+        True, Some(doc) if doc.version == d.doc.revision ->
+          case documents.zip(ctx, doc) {
+            Ok(bits) ->
+              response.new(200)
+              |> response.set_header("content-type", "application/zip")
+              |> response.set_header(
+                "content-disposition",
+                "attachment; filename=\""
+                  <> model.doc_ref(doc.id)
+                  <> "-r"
+                  <> int.to_string(doc.version)
+                  <> ".zip\"",
+              )
+              |> response.set_header("cache-control", "no-store")
+              |> response.set_body(mist.Bytes(bytes_tree.from_bit_array(bits)))
+            Error(reason) -> {
+              // give the link back so the agent can retry
+              store.update_lazy(ctx.store, fn(_, e, _) {
+                store.EphemeralChanged(
+                  Ephemeral(
+                    ..e,
+                    doc_downloads: dict.insert(e.doc_downloads, sha, d),
+                  ),
+                  Nil,
+                )
+              })
+              reply(503, [
+                #("error", json.string("Cannot read the document: " <> reason)),
+              ])
+            }
+          }
+        True, _ ->
+          reply(410, [
+            #(
+              "error",
+              json.string(
+                model.doc_ref(d.doc.id)
+                <> " has changed or been deleted since this link was issued; ask huddy_doc_download for a new one.",
+              ),
+            ),
+          ])
+      }
+    _ -> reply(404, [#("error", json.string("unknown or expired link"))])
+  }
+}
+
 // --- upload URL ------------------------------------------------------------------
 
 /// `POST /docs/upload/<secret>`: the body is a zip archive or Markdown. The

@@ -42,6 +42,7 @@ pub fn handler(
         response.new(404) |> response.set_body(mist.Bytes(bytes_tree.new()))
       // large bodies, authenticated by the secret in the path
       ["docs", "upload", secret] -> docs.upload(ctx, req, secret)
+      ["docs", "download", secret] -> docs.download_link(ctx, req, secret)
       _ -> web(req)
     }
   }

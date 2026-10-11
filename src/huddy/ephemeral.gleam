@@ -1,6 +1,7 @@
 //// Short-lived data kept in memory only (never written to the state file):
 //// login codes, OAuth authorization codes and pending consent requests,
-//// legacy MCP session client info, one-time document upload URLs, and
+//// legacy MCP session client info, one-time document upload and download
+//// URLs, and
 //// review-sweep bookkeeping. Losing it
 //// on restart costs at most a re-sent login code or a repeated OAuth click.
 
@@ -59,6 +60,13 @@ pub type DocUpload {
   )
 }
 
+/// A one-time URL to download a document's zip (`huddy_doc_download`),
+/// keyed by the SHA-256 of its secret. It serves the revision it was issued
+/// for, to the user it was issued to.
+pub type DocDownload {
+  DocDownload(user: Int, doc: DocRevision, expires_at: Int)
+}
+
 pub type Ephemeral {
   Ephemeral(
     login_codes: Dict(String, LoginCode),
@@ -66,6 +74,7 @@ pub type Ephemeral {
     oauth_codes: Dict(String, OAuthCode),
     mcp_sessions: Dict(String, McpSession),
     doc_uploads: Dict(String, DocUpload),
+    doc_downloads: Dict(String, DocDownload),
     /// agent id -> time of the last review sweep of that agent
     swept: Dict(Int, Int),
   )
@@ -73,6 +82,7 @@ pub type Ephemeral {
 
 pub fn new() -> Ephemeral {
   Ephemeral(
+    dict.new(),
     dict.new(),
     dict.new(),
     dict.new(),
@@ -95,5 +105,8 @@ pub fn expire(eph: Ephemeral, now: Int) -> Ephemeral {
     oauth_codes: dict.filter(eph.oauth_codes, fn(_, c) { c.expires_at > now }),
     mcp_sessions: dict.filter(eph.mcp_sessions, fn(_, s) { s.expires_at > now }),
     doc_uploads: dict.filter(eph.doc_uploads, fn(_, u) { u.expires_at > now }),
+    doc_downloads: dict.filter(eph.doc_downloads, fn(_, d) {
+      d.expires_at > now
+    }),
   )
 }

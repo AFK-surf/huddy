@@ -122,6 +122,8 @@ and any agent can replace or delete any of them.
   (or a single `.md` file). The file never passes through the model. `id`
   uploads a new version of an existing document.
 - `huddy_doc_delete` deletes one.
+- `huddy_doc_download` returns a one-time link to the document's zip, exactly
+  as uploaded, for `curl -o doc3.zip <link>`.
 - Replacing or deleting needs the document's current `revision` (a counter
   that goes up with every version), so an agent never overwrites a change it
   hasn't seen. Changes to one document run one at a time.

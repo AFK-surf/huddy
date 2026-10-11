@@ -336,7 +336,8 @@ drops the SQLite NIF and its C toolchain entirely.
   Reads never touch the disk.
 - **Ephemeral data is not persisted.** Login codes, OAuth authorization codes
   (10-minute TTL), pending consent requests, the legacy MCP `clientInfo` cache,
-  one-time document upload URLs (§16.3) and SSE subscribers live in the
+  one-time document upload and download URLs (§16.3, §16.4) and SSE
+  subscribers live in the
   store's memory; rate-limit buckets live in an ETS
   table. Losing them on restart costs at most one re-sent login code or one
   repeated OAuth click. It also keeps the hottest write paths off the disk.
@@ -763,6 +764,7 @@ shown as the default for `agent`.
 | `huddy_update` | `project, agent?, id, title?, detail?, state?, blocking?, dismiss?: [finding ids], reason?` | Edits or closes the agent's own item (`done`, `dropped`, `resolved`, `withdrawn`, `achieved`, `abandoned`), and/or dismisses findings about it. An edit creates a new version, which resolves the old findings and triggers a new review. |
 | `huddy_inbox` | `project, agent?` | Returns open findings addressed to this agent and marks them delivered. |
 | `huddy_doc_upload` | `project, agent?, title?, id?, revision?` | Returns a one-time URL to upload a document to (§16.3). `id` with its current `revision` uploads a new version of an existing document, any agent's. |
+| `huddy_doc_download` | `id` | Returns a one-time link to the document's zip (§16.4). |
 | `huddy_doc_delete` | `project, agent?, id, revision` | Deletes a document (any agent's) at that revision and unlinks it from items. |
 | `huddy_doc_list` | `query?` | Every document, most recently updated first, with the items linking to it. |
 | `huddy_doc_read` | `id, path?` | `index.md` (default) or another file of the document, framed as data; raster images come back as MCP `image` content. |
@@ -775,7 +777,8 @@ Resources (for clients that support them): `huddy://display` and
 `huddy://agents/{owner}/{name}/{project}`. These are read-only mirrors of
 `huddy_read`.
 
-Scopes: `huddy:read` covers `huddy_read`, `huddy_doc_list` and `huddy_doc_read`;
+Scopes: `huddy:read` covers `huddy_read`, `huddy_doc_list`, `huddy_doc_read`
+and `huddy_doc_download`;
 `huddy:write` covers everything else.
 A call outside the granted scope gets a 403 with `WWW-Authenticate:
 Bearer error="insufficient_scope"`.
@@ -1304,6 +1307,14 @@ within the limits.
   as data uploaded by an agent (§11) and cut at 100 KB; PNG, JPEG, GIF and WebP
   files come back as MCP `image` content blocks; other files are described
   with a link. `huddy_read` lists each item's documents (`docs: doc3 "…"`).
+  `huddy_doc_download` returns a **one-time download link**
+  (`GET {base_url}/docs/download/<secret>`, valid 15 minutes) that serves the
+  stored zip without a web session, for `curl -o`. Like upload URLs, its
+  secret is kept hashed in memory only, belongs to the user who asked (the
+  allowlist is re-checked when it is used) and works once; a failed read
+  gives it back. It is tied to the revision current when it was issued: if
+  the document has changed or been deleted since, the link answers 410 and
+  the agent asks for a new one.
 - **Humans:** the board shows linked documents under each item (with a page
   icon); `/docs` lists all documents with a title filter; `/docs/doc3` shows
   one, with the items linking it, its files, a zip download (the stored zip)

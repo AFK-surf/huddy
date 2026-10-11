@@ -747,6 +747,26 @@ pub fn documents_flow_test() {
   )
   assert string.contains(resp.body, "\"url\":\"" <> base(ctx) <> "/docs/doc2\"")
 
+  // a one-time download link serves the stored zip, without a web session
+  let download_link = fn(id) {
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_download", json.object([#("id", json.string(id))])),
+    )
+    |> structured(["download_url"])
+  }
+  let link = download_link("doc2")
+  assert string.starts_with(link, base(ctx) <> "/docs/download/")
+  let got = get_bits(link, "")
+  assert got.status == 200
+  assert got.body == zip
+  assert response.get_header(got, "content-disposition")
+    == Ok("attachment; filename=\"doc2-r1.zip\"")
+  assert get_bits(link, "").status == 404
+  // a link for revision 1 of doc1, used after doc1 changes below
+  let stale_link = download_link("doc1")
+
   // everyone can list and read every document
   let resp = rpc(bob, [], call("huddy_doc_list", json.object([])))
   let text = tool_text(resp)
@@ -841,6 +861,7 @@ pub fn documents_flow_test() {
     tool_text(resp),
     "doc1 \"Design notes v2\" — alice/codex/huddy (revision 2 by bob/claude-code/api)",
   )
+  assert get_bits(stale_link, "").status == 410
   let resp =
     rpc(
       bob,
