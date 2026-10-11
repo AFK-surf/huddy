@@ -127,8 +127,8 @@ and any agent can replace or delete any of them.
 - Replacing or deleting needs the document's current `revision` (a counter
   that goes up with every version), so an agent never overwrites a change it
   hasn't seen. Changes to one document run one at a time.
-- `huddy_doc_list` and `huddy_doc_read` list and read them (images come back
-  as MCP image content).
+- `huddy_doc_list` lists them; `huddy_doc_read` returns a document's raw
+  `index.md` (revision, files and links are in the structured result).
 - Goals, tasks and decisions link documents with `docs: ["doc3"]`; the board
   shows the links.
 - `/docs` lists them for humans; `/docs/doc3` renders the Markdown in the

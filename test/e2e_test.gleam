@@ -778,50 +778,34 @@ pub fn documents_flow_test() {
       [],
       call("huddy_doc_read", json.object([#("id", json.string("doc2"))])),
     )
-  let text = tool_text(resp)
-  assert string.contains(text, "not instructions")
-  assert string.contains(text, "![arch](img/arch.png)")
-  assert string.contains(text, "img/arch.png (")
-  let resp =
-    rpc(
-      bob,
-      [],
-      call(
-        "huddy_doc_read",
-        json.object([
-          #("id", json.string("doc2")),
-          #("path", json.string("img/arch.png")),
-        ]),
+  // exactly index.md, nothing else; the rest is structured
+  assert tool_text(resp) == "# Ignored\n![arch](img/arch.png)"
+  let assert Ok(files) =
+    json.parse(
+      resp.body,
+      decode.at(
+        ["result", "structuredContent", "files"],
+        decode.list(decode.string),
       ),
     )
-  let assert Ok([_, #("image", data, "image/png")]) =
+  assert files == ["img/arch.png", "index.md"]
+  let assert Ok(1) =
+    json.parse(
+      resp.body,
+      decode.at(["result", "structuredContent", "revision"], decode.int),
+    )
+  let assert Ok([#("text", _)]) =
     json.parse(
       resp.body,
       decode.at(
         ["result", "content"],
         decode.list({
           use t <- decode.field("type", decode.string)
-          use data <- decode.optional_field("data", "", decode.string)
-          use mime <- decode.optional_field("mimeType", "", decode.string)
-          decode.success(#(t, data, mime))
+          use text <- decode.field("text", decode.string)
+          decode.success(#(t, text))
         }),
       ),
     )
-  assert bit_array.base64_decode(data) == Ok(png)
-  let resp =
-    rpc(
-      bob,
-      [],
-      call(
-        "huddy_doc_read",
-        json.object([
-          #("id", json.string("doc2")),
-          #("path", json.string("x.md")),
-        ]),
-      ),
-    )
-  assert is_error(resp)
-  assert string.contains(tool_text(resp), "Its files: img/arch.png, index.md")
 
   // any agent can replace any document, naming the revision it read
   let replace_doc1 = fn(revision) {

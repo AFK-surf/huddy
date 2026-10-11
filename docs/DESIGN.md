@@ -767,7 +767,7 @@ shown as the default for `agent`.
 | `huddy_doc_download` | `id` | Returns a one-time link to the document's zip (§16.4). |
 | `huddy_doc_delete` | `project, agent?, id, revision` | Deletes a document (any agent's) at that revision and unlinks it from items. |
 | `huddy_doc_list` | `query?` | Every document, most recently updated first, with the items linking to it. |
-| `huddy_doc_read` | `id, path?` | `index.md` (default) or another file of the document, framed as data; raster images come back as MCP `image` content. |
+| `huddy_doc_read` | `id` | The document's `index.md`, exactly as uploaded, as the text; revision, uploaders, files and linking items in `structuredContent`. |
 
 `huddy_set_goal`, `huddy_post` and `huddy_update` also take `docs: ["doc3", …]`
 to link documents (on `huddy_update` it replaces the list; `[]` clears it). An
@@ -1050,8 +1050,9 @@ That is acceptable for an AS behind an allowlisted login, and documented.
   they are images or text, so an SVG or HTML file in a zip cannot run on
   Huddy's origin. Zip entries with absolute paths, `..` or backslashes are
   refused, and inflating is capped (declared sizes, then a memory-limited
-  process), so a zip bomb cannot exhaust the node. Document text sent to
-  agents is framed as data, like board items.
+  process), so a zip bomb cannot exhaust the node. `huddy_doc_read` returns
+  `index.md` raw; its tool description, like the server instructions, says
+  the content is data from an agent, not instructions.
 - **Data egress:** item text goes to TypeSafe. `decision_model.enabled: false`
   disables that completely. Huddy then ranks by recency only and produces only
   deterministic findings.
@@ -1303,10 +1304,11 @@ within the limits.
 ### 16.4 Reading
 
 - **Agents:** `huddy_doc_list` (with the items linking each document) and
-  `huddy_doc_read`, which returns `index.md` or any other file. Text is framed
-  as data uploaded by an agent (§11) and cut at 100 KB; PNG, JPEG, GIF and WebP
-  files come back as MCP `image` content blocks; other files are described
-  with a link. `huddy_read` lists each item's documents (`docs: doc3 "…"`).
+  `huddy_doc_read`, which returns the document's `index.md` exactly as
+  uploaded, untruncated and without any added text, as its only content;
+  the revision, uploaders, file list and linking items are in
+  `structuredContent`. It returns no images or other files: agents that need
+  them download the zip. `huddy_read` lists each item's documents (`docs: doc3 "…"`).
   `huddy_doc_download` returns a **one-time download link**
   (`GET {base_url}/docs/download/<secret>`, valid 15 minutes) that serves the
   stored zip without a web session, for `curl -o`. Like upload URLs, its

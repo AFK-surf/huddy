@@ -601,13 +601,7 @@ fn dispatch(
           let result = tools.call(ctx, principal, client_name, name, args)
           log_tool(principal, name, result.is_error)
           ok([
-            #(
-              "content",
-              json.preprocessed_array([
-                text_content(result.text),
-                ..result.extra
-              ]),
-            ),
+            #("content", json.array([text_content(result.text)], fn(x) { x })),
             #("structuredContent", result.structured),
             #("isError", json.bool(result.is_error)),
           ])

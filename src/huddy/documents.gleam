@@ -462,22 +462,6 @@ pub fn read_file(
   }
 }
 
-/// Is this file text an agent can read as-is?
-pub fn is_text(path: String) -> Bool {
-  case blob.content_type(path) {
-    "text/" <> _ | "application/json" | "image/svg+xml" -> True
-    _ -> False
-  }
-}
-
-/// Raster images an MCP client can show as an image content block.
-pub fn is_image(path: String) -> Bool {
-  case blob.content_type(path) {
-    "image/png" | "image/jpeg" | "image/gif" | "image/webp" -> True
-    _ -> False
-  }
-}
-
 pub fn url(ctx: Ctx, doc_id: Int) -> String {
   ctx.config.base_url <> "/docs/" <> model.doc_ref(doc_id)
 }
