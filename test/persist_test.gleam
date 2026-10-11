@@ -4,6 +4,7 @@ import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import huddy/blob
 import huddy/codec
 import huddy/model
 import huddy/persist
@@ -65,10 +66,11 @@ fn encoded(s: model.State) -> String {
 
 pub fn round_trip_test() {
   let dir = support.tmp_dir()
-  let path = dir <> "/huddy.json"
+  let file = dir <> "/huddy.json"
+  let path = blob.File(file)
   let s = sample_state()
   let assert Ok(_) = persist.write(path, s, 42)
-  let assert Ok(loaded) = persist.load(path, dir <> "/backups")
+  let assert Ok(loaded) = persist.load(path, blob.File(dir <> "/backups"))
   assert encoded(loaded) == encoded(s)
   assert loaded.saved_at == 42
 }
@@ -90,31 +92,34 @@ pub fn retired_findings_are_dropped_on_load_test() {
 
 pub fn missing_file_starts_empty_test() {
   let dir = support.tmp_dir()
-  let assert Ok(s) = persist.load(dir <> "/huddy.json", dir <> "/backups")
+  let assert Ok(s) =
+    persist.load(blob.File(dir <> "/huddy.json"), blob.File(dir <> "/backups"))
   assert encoded(s) == encoded(model.empty_state())
 }
 
 pub fn leftover_tmp_is_ignored_and_removed_test() {
   let dir = support.tmp_dir()
-  let path = dir <> "/huddy.json"
+  let file = dir <> "/huddy.json"
+  let path = blob.File(file)
   let assert Ok(_) = persist.write(path, sample_state(), 1)
   // a crash mid-write leaves a partial temp file next to the real one
   support.write_file(
-    persist.tmp_path(path),
+    persist.tmp_path(file),
     bit_array.from_string("{\"format\":1,\"next"),
   )
-  let assert Ok(loaded) = persist.load(path, dir <> "/backups")
+  let assert Ok(loaded) = persist.load(path, blob.File(dir <> "/backups"))
   assert encoded(loaded) == encoded(sample_state())
-  assert !sys.file_exists(persist.tmp_path(path))
+  assert !sys.file_exists(persist.tmp_path(file))
 }
 
 pub fn truncated_file_refuses_and_names_backup_test() {
   let dir = support.tmp_dir()
-  let path = dir <> "/huddy.json"
-  let backups = dir <> "/backups"
+  let file = dir <> "/huddy.json"
+  let path = blob.File(file)
+  let backups = blob.File(dir <> "/backups")
   let assert Ok(backup) =
     persist.backup(backups, 3, sample_state(), 1_791_622_800_000)
-  support.write_file(path, bit_array.from_string("{\"format\":1,\"saved_at\":"))
+  support.write_file(file, bit_array.from_string("{\"format\":1,\"saved_at\":"))
   let assert Error(message) = persist.load(path, backups)
   assert string.contains(message, "cannot decode")
   assert string.contains(message, backup)
@@ -122,28 +127,31 @@ pub fn truncated_file_refuses_and_names_backup_test() {
 
 pub fn missing_file_with_backups_refuses_test() {
   let dir = support.tmp_dir()
-  let backups = dir <> "/backups"
+  let backups = blob.File(dir <> "/backups")
   let assert Ok(_) =
     persist.backup(backups, 3, sample_state(), 1_791_622_800_000)
-  let assert Error(message) = persist.load(dir <> "/huddy.json", backups)
+  let assert Error(message) =
+    persist.load(blob.File(dir <> "/huddy.json"), backups)
   assert string.contains(message, "missing but backups exist")
 }
 
 pub fn newer_format_refuses_test() {
   let dir = support.tmp_dir()
-  let path = dir <> "/huddy.json"
-  support.write_file(path, bit_array.from_string("{\"format\": 99}"))
-  let assert Error(message) = persist.load(path, dir <> "/backups")
+  let file = dir <> "/huddy.json"
+  let path = blob.File(file)
+  support.write_file(file, bit_array.from_string("{\"format\": 99}"))
+  let assert Error(message) = persist.load(path, blob.File(dir <> "/backups"))
   assert string.contains(message, "newer than this build")
 }
 
 pub fn dangling_reference_refuses_test() {
   let dir = support.tmp_dir()
-  let path = dir <> "/huddy.json"
+  let file = dir <> "/huddy.json"
+  let path = blob.File(file)
   let s = sample_state()
   let broken = model.State(..s, users: s.users |> dict_drop_all)
   let assert Ok(_) = persist.write(path, broken, 1)
-  let assert Error(message) = persist.load(path, dir <> "/backups")
+  let assert Error(message) = persist.load(path, blob.File(dir <> "/backups"))
   assert string.contains(message, "dangling reference")
 }
 
@@ -153,15 +161,15 @@ fn dict_drop_all(d: dict.Dict(Int, model.User)) -> dict.Dict(Int, model.User) {
 
 pub fn backups_are_pruned_test() {
   let dir = support.tmp_dir()
-  let backups = dir <> "/backups"
+  let backups = blob.File(dir <> "/backups")
   let day = 86_400_000
   let start = 1_791_622_800_000
   let _ = persist.backup(backups, 2, sample_state(), start)
   let _ = persist.backup(backups, 2, sample_state(), start + day)
   let assert Ok(newest) =
     persist.backup(backups, 2, sample_state(), start + 2 * day)
-  let assert Ok(names) = sys.list_dir(backups)
+  let assert Ok(names) = sys.list_dir(dir <> "/backups")
   assert list.length(names) == 2
-  let assert Ok(found) = persist.newest_backup(backups)
+  let assert Ok(Some(found)) = persist.newest_backup(backups)
   assert found == newest
 }

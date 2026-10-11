@@ -71,7 +71,8 @@ pub opaque type Msg {
   Read(run: fn(State, Ephemeral) -> Nil)
   Update(run: fn(State, Ephemeral, Int) -> Applied, durable: Bool)
   Flush
-  Written(result: Result(Nil, String))
+  /// the snapshot's size in bytes, or why the write failed
+  Written(result: Result(Int, String))
   Subscribe(subject: Subject(BoardEvent), user: Int)
   Unsubscribe(subject: Subject(BoardEvent))
   Rerank
@@ -284,13 +285,17 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
     Written(result) -> {
       let waiting = list.reverse(self.inflight)
       list.each(waiting, fn(w) {
-        w.reply(result.map_error(result, fn(e) { "storage: " <> e }))
+        w.reply(
+          result
+          |> result.replace(Nil)
+          |> result.map_error(fn(e) { "storage: " <> e }),
+        )
       })
       let self = Self(..self, writing: False, inflight: [])
       let self =
         list.fold(waiting, self, fn(acc, w) { run_effects(acc, w.effects) })
       case result {
-        Ok(_) -> {
+        Ok(size) -> {
           let self = case self.storage_error {
             Some(_) -> {
               logging.log(logging.Notice, "storage: write succeeded again")
@@ -301,7 +306,7 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
             }
             None -> Self(..self, failures: 0)
           }
-          let self = check_size(self, now)
+          let self = check_size(self, size, now)
           case self.dirty {
             True ->
               actor.continue(schedule(self, self.config.storage.flush_ms, now))
@@ -439,9 +444,8 @@ fn start_write(self: Self, now: Int) -> Self {
   Self(..self, writing: True, dirty: False, inflight: self.pending, pending: [])
 }
 
-fn check_size(self: Self, now: Int) -> Self {
+fn check_size(self: Self, size: Int, now: Int) -> Self {
   let limit = self.config.storage.warn_mb * 1_048_576
-  let size = sys.file_size(self.config.storage.path)
   case size > limit && now - self.size_warned_at > 3_600_000 {
     True -> {
       logging.log(

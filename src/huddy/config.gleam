@@ -2,6 +2,7 @@
 //// any string value may instead be `{"$env": "NAME"}`.
 
 import gleam/dynamic/decode.{type Decoder}
+import gleam/http
 import gleam/int
 import gleam/json
 import gleam/list
@@ -9,7 +10,9 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/uri
+import huddy/blob.{type Location}
 import huddy/net
+import huddy/s3
 import huddy/sys
 
 pub type Config {
@@ -35,8 +38,9 @@ pub type Config {
 
 pub type Storage {
   Storage(
-    path: String,
-    backup_dir: String,
+    /// a local path, or `s3://bucket/key` (see `storage.s3`)
+    path: Location,
+    backup_dir: Location,
     backup_keep: Int,
     flush_ms: Int,
     idle_flush_seconds: Int,
@@ -291,16 +295,17 @@ pub fn decoder() -> Decoder(Config) {
 }
 
 fn storage_decoder() -> Decoder(Storage) {
-  use path <- decode.field("path", str())
-  use backup_dir <- opt("backup_dir", "", str())
+  use s3 <- section("s3", s3_decoder(), default_s3())
+  use path <- decode.field("path", location(s3))
+  use backup_dir <- opt("backup_dir", None, decode.map(location(s3), Some))
   use backup_keep <- opt("backup_keep", 7, decode.int)
   use flush_ms <- opt("flush_ms", 100, decode.int)
   use idle_flush_seconds <- opt("idle_flush_seconds", 5, decode.int)
   use warn_mb <- opt("warn_mb", 10, decode.int)
-  let backup_dir = case backup_dir {
-    "" -> parent_dir(path) <> "/backups"
-    dir -> dir
-  }
+  let backup_dir =
+    option.lazy_unwrap(backup_dir, fn() {
+      blob.child(blob.parent(path), "backups")
+    })
   decode.success(Storage(
     path:,
     backup_dir:,
@@ -311,11 +316,89 @@ fn storage_decoder() -> Decoder(Storage) {
   ))
 }
 
-fn parent_dir(path: String) -> String {
-  case string.split(path, "/") |> list.reverse {
-    [_, ..rest] if rest != [] -> rest |> list.reverse |> string.join("/")
-    _ -> "."
+fn location(s3: s3.Config) -> Decoder(Location) {
+  use text <- decode.then(str())
+  case blob.parse(text, s3) {
+    Ok(location) -> decode.success(location)
+    Error(_) -> decode.failure(blob.File(""), "a path or s3://bucket/key")
   }
+}
+
+/// S3 settings, used by `s3://` paths. Region and credentials default to the
+/// standard AWS environment variables; the endpoint defaults to AWS S3 in
+/// that region.
+fn s3_decoder() -> Decoder(s3.Config) {
+  let default = default_s3()
+  use region <- opt("region", default.region, str())
+  use endpoint <- opt("endpoint", "", str())
+  use path_style <- opt("path_style", endpoint != "", decode.bool)
+  use access_key_id <- opt("access_key_id", default.access_key_id, str())
+  use secret_access_key <- opt(
+    "secret_access_key",
+    default.secret_access_key,
+    str(),
+  )
+  use session_token <- opt("session_token", default.session_token, str())
+  let endpoint = case endpoint {
+    "" -> Ok(#(http.Https, "s3." <> region <> ".amazonaws.com", None))
+    url -> parse_endpoint(url)
+  }
+  case endpoint {
+    Ok(#(scheme, host, port)) ->
+      decode.success(s3.Config(
+        region:,
+        scheme:,
+        host:,
+        port:,
+        path_style:,
+        access_key_id:,
+        secret_access_key:,
+        session_token:,
+      ))
+    Error(_) ->
+      decode.failure(default, "S3 settings with an http(s) endpoint URL")
+  }
+}
+
+fn default_s3() -> s3.Config {
+  let env = fn(names) { list.find_map(names, sys.getenv) |> result.unwrap("") }
+  let region = case env(["AWS_REGION", "AWS_DEFAULT_REGION"]) {
+    "" -> "us-east-1"
+    region -> region
+  }
+  s3.Config(
+    region:,
+    scheme: http.Https,
+    host: "s3." <> region <> ".amazonaws.com",
+    port: None,
+    path_style: False,
+    access_key_id: env(["AWS_ACCESS_KEY_ID"]),
+    secret_access_key: env(["AWS_SECRET_ACCESS_KEY"]),
+    session_token: env(["AWS_SESSION_TOKEN"]),
+  )
+}
+
+fn parse_endpoint(
+  url: String,
+) -> Result(#(http.Scheme, String, Option(Int)), Nil) {
+  use parsed <- result.try(uri.parse(strip_trailing_slash(url)))
+  use scheme <- result.try(case parsed.scheme {
+    Some("https") -> Ok(http.Https)
+    Some("http") -> Ok(http.Http)
+    _ -> Error(Nil)
+  })
+  use host <- result.try(option.to_result(parsed.host, Nil))
+  use _ <- result.try(case parsed.path, host {
+    "", _ if host != "" -> Ok(Nil)
+    _, _ -> Error(Nil)
+  })
+  // Drop the scheme's default port, so the signed Host header matches the one
+  // the HTTP client sends.
+  let port = case scheme, parsed.port {
+    http.Https, Some(443) | http.Http, Some(80) -> None
+    _, port -> port
+  }
+  Ok(#(scheme, host, port))
 }
 
 fn auth_decoder() -> Decoder(Auth) {
@@ -624,6 +707,7 @@ fn validate(config: Config) -> Result(Config, String) {
       _, _ -> Ok(Nil)
     },
   )
+  use _ <- result.try(validate_storage(config.storage))
   use _ <- result.try(
     case config.decision_model.enabled, config.decision_model.api_key {
       True, "" ->
@@ -634,6 +718,31 @@ fn validate(config: Config) -> Result(Config, String) {
     },
   )
   Ok(Config(..config, base_url:))
+}
+
+fn validate_storage(storage: Storage) -> Result(Nil, String) {
+  let objects =
+    [storage.path, storage.backup_dir]
+    |> list.filter_map(fn(location) {
+      case location {
+        blob.Object(s3:, ..) -> Ok(s3)
+        blob.File(_) -> Error(Nil)
+      }
+    })
+  use _ <- result.try(case storage.path {
+    blob.Object(key: "", ..) ->
+      Error("config: storage.path must name an object: s3://bucket/key")
+    _ -> Ok(Nil)
+  })
+  case objects {
+    [s3, ..] if s3.access_key_id == "" || s3.secret_access_key == "" ->
+      Error(
+        "config: s3:// storage needs credentials: set storage.s3.access_key_id "
+        <> "and storage.s3.secret_access_key, or AWS_ACCESS_KEY_ID and "
+        <> "AWS_SECRET_ACCESS_KEY",
+      )
+    _ -> Ok(Nil)
+  }
 }
 
 // --- helpers used across the app ---------------------------------------------

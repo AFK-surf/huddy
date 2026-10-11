@@ -50,14 +50,36 @@ docker run -p 8080:8080 \
   huddy
 ```
 
+To keep the state in S3 instead of a volume, see [State in S3](#state-in-s3).
+
 Put Huddy behind a TLS-terminating reverse proxy. List the proxy in
 `server.trusted_proxies` so rate limits see real client IPs, and have the proxy
 redact `/mcp/k/…` paths from its access logs (they contain secrets). The state
-volume must be a local POSIX filesystem.
+volume must be a local POSIX filesystem (or use S3).
 
 Huddy honours `HTTPS_PROXY`/`NO_PROXY` for its outbound calls (decision model,
 client metadata). For builds without GitHub access, or behind a TLS-intercepting
 proxy, see the comments at the top of the [`Dockerfile`](Dockerfile).
+
+### State in S3
+
+Set `storage.path` to an S3 URL. Backups then go to the `backups/` prefix next
+to it (or set `storage.backup_dir`, local or `s3://`):
+
+```json
+"storage": {
+  "path": "s3://acme-huddy/prod/huddy.json",
+  "s3": { "region": "eu-west-1" }
+}
+```
+
+Credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
+`AWS_SESSION_TOKEN`, or from `storage.s3.access_key_id` etc. Region defaults to
+`AWS_REGION`. For MinIO, R2 and other S3-compatible stores, add
+`"endpoint": "https://minio.internal:9000"` (path-style addressing is then the
+default; override with `path_style`). Huddy needs `s3:GetObject`,
+`s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket`. Details:
+[DESIGN.md §5.7](docs/DESIGN.md#57-state-in-s3).
 
 ## Connect an agent
 
