@@ -151,27 +151,6 @@ fn dict_drop_all(d: dict.Dict(Int, model.User)) -> dict.Dict(Int, model.User) {
   dict.drop(d, dict.keys(d))
 }
 
-pub fn lock_is_exclusive_test() {
-  let dir = support.tmp_dir()
-  let path = dir <> "/huddy.json"
-  // pid 1 always exists: the lock is held by a live process
-  support.write_file(persist.lock_path(path), bit_array.from_string("1"))
-  let assert Error(message) = persist.acquire_lock(path)
-  assert string.contains(message, "pid 1")
-}
-
-pub fn stale_lock_is_replaced_test() {
-  let dir = support.tmp_dir()
-  let path = dir <> "/huddy.json"
-  support.write_file(
-    persist.lock_path(path),
-    bit_array.from_string("999999999"),
-  )
-  let assert Ok(_) = persist.acquire_lock(path)
-  persist.release_lock(path)
-  assert !sys.file_exists(persist.lock_path(path))
-}
-
 pub fn backups_are_pruned_test() {
   let dir = support.tmp_dir()
   let backups = dir <> "/backups"

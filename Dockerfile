@@ -39,6 +39,11 @@ COPY priv ./priv
 RUN gleam export erlang-shipment
 
 FROM erlang:${OTP_VERSION}-slim
+# The slim image has no CA bundle; outbound TLS (SMTP, decision model,
+# client metadata documents) verifies peers against it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --home /var/lib/huddy --create-home huddy \
     && mkdir -p /etc/huddy && chown huddy /var/lib/huddy
 COPY --from=build /src/build/erlang-shipment /app

@@ -33,12 +33,6 @@ pub fn ensure_dir(dir: String) -> Result(Nil, String)
 @external(erlang, "huddy_ffi", "list_dir")
 pub fn list_dir(dir: String) -> Result(List(String), String)
 
-@external(erlang, "huddy_ffi", "acquire_lock")
-pub fn acquire_lock(path: String) -> Result(Nil, String)
-
-@external(erlang, "huddy_ffi", "release_lock")
-pub fn release_lock(path: String) -> Nil
-
 @external(erlang, "huddy_ffi", "utc_date_compact")
 pub fn utc_date_compact(ms: Int) -> String
 

@@ -1,7 +1,7 @@
 -module(huddy_ffi).
 
 -export([now_ms/0, os_pid/0, getenv/1, atomic_write/2, read_file/1, delete_file/1,
-         file_exists/1, ensure_dir/1, list_dir/1, acquire_lock/1, release_lock/1,
+         file_exists/1, ensure_dir/1, list_dir/1, 
          utc_date_compact/1, rfc2822_date/1, getaddrs/1, send_email/5,
          limiter_init/0, rate_take/4, file_size/1, halt/1, rescue/1,
          configure_proxy/0]).
@@ -77,38 +77,6 @@ list_dir(Dir) ->
         {error, Reason} -> {error, reason_to_binary(Reason)}
     end.
 
-%% Single-instance lock: create Lock exclusively and write our OS pid into it.
-%% A lock whose pid no longer exists (checked via /proc) is stale and replaced.
-acquire_lock(Lock) ->
-    Pid = os_pid(),
-    case file:open(Lock, [write, exclusive, raw, binary]) of
-        {ok, Fd} ->
-            ok = file:write(Fd, Pid),
-            ok = file:sync(Fd),
-            ok = file:close(Fd),
-            {ok, nil};
-        {error, eexist} ->
-            case file:read_file(Lock) of
-                {ok, Other} ->
-                    OtherPid = string:trim(Other),
-                    case OtherPid =/= <<>> andalso OtherPid =/= Pid
-                         andalso filelib:is_dir(<<"/proc/", OtherPid/binary>>) of
-                        true ->
-                            {error, <<"another huddy process (pid ", OtherPid/binary,
-                                      ") holds ", Lock/binary>>};
-                        false ->
-                            _ = file:delete(Lock),
-                            acquire_lock(Lock)
-                    end;
-                {error, Reason} -> {error, reason_to_binary(Reason)}
-            end;
-        {error, Reason} -> {error, reason_to_binary(Reason)}
-    end.
-
-release_lock(Lock) ->
-    _ = file:delete(Lock),
-    nil.
-
 utc_date_compact(Ms) ->
     {{Y, M, D}, _} = calendar:system_time_to_universal_time(Ms, millisecond),
     list_to_binary(io_lib:format("~4..0B~2..0B~2..0B", [Y, M, D])).
@@ -138,6 +106,9 @@ send_email(Opts, From, To, Subject, Body) ->
     Host = binary_to_list(maps:get(host, Opts)),
     Tls = maps:get(tls, Opts),
     TlsOptions = [{verify, verify_peer},
+                  %% gen_smtp defaults to {depth, 0}, which rejects any chain
+                  %% with an intermediate CA (i.e. nearly every public server).
+                  {depth, 10},
                   {cacerts, public_key:cacerts_get()},
                   {server_name_indication, Host},
                   {customize_hostname_check,

@@ -75,7 +75,7 @@ pub fn default_overrides() -> Overrides {
   Overrides(None, None, None, None)
 }
 
-/// Start everything: lock the state file, load it, then supervise the
+/// Start everything: load the state file, then supervise the
 /// store, the janitor and the HTTP server.
 pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
   sys.limiter_init()
@@ -85,7 +85,6 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
   }
   let storage = cfg.storage
   use _ <- result.try(sys.ensure_dir(parent(storage.path)))
-  use _ <- result.try(persist.acquire_lock(storage.path))
   // Load once up front so a bad file fails startup with a clear message.
   use _ <- result.try(persist.load(storage.path, storage.backup_dir))
   let store_name = process.new_name("huddy_store")

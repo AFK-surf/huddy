@@ -13,7 +13,7 @@ pub fn respond(status: Int, document: String) -> Response {
   |> wisp.set_header("referrer-policy", "same-origin")
   |> wisp.set_header(
     "content-security-policy",
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; form-action 'self' http: https:",
+    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'",
   )
 }
 
