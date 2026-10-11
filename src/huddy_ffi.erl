@@ -8,7 +8,7 @@
          zip_extract/3, zip_create/1, zip_read/2,
          zip_cache_init/0, zip_cache_get/1, zip_cache_put/3, zip_cache_delete/1,
          utc_date_compact/1, amz_date/1, rfc2822_date/1, getaddrs/1, send_email/5,
-         limiter_init/0, rate_take/4, halt/1, rescue/1,
+         limiter_init/0, rate_take/4, halt/1, rescue/1, capture/1, reraise/1, describe_crash/1,
          configure_proxy/0]).
 
 now_ms() -> erlang:system_time(millisecond).
@@ -363,6 +363,19 @@ rescue(F) ->
     try {ok, F()}
     catch Class:Reason -> {error, reason_to_binary({Class, Reason})}
     end.
+
+%% Run F, keeping any exception (class, reason and stacktrace) so that
+%% another process can re-raise it with reraise/1.
+capture(F) ->
+    try {ok, F()}
+    catch Class:Reason:Stacktrace -> {error, {Class, Reason, Stacktrace}}
+    end.
+
+reraise({Class, Reason, Stacktrace}) -> erlang:raise(Class, Reason, Stacktrace).
+
+%% Depth-limited, as the reason may hold the whole state.
+describe_crash({Class, Reason, _}) ->
+    unicode:characters_to_binary(io_lib:format("~0P", [{Class, Reason}, 20])).
 
 reason_to_binary(Reason) when is_binary(Reason) -> Reason;
 reason_to_binary(Reason) when is_atom(Reason) -> atom_to_binary(Reason);

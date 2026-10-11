@@ -8,6 +8,11 @@
 ////   is on disk (durable);
 //// - `update_lazy` applies a best-effort change and replies immediately;
 ////   it is flushed with the next batch or within `idle_flush_seconds`.
+////
+//// A closure that crashes does not crash the actor: the exception is sent
+//// back and raised again in the caller, so a bug in one request fails that
+//// request instead of restarting the store (which would drop un-flushed
+//// changes, in-memory data and every live page's subscription).
 
 import gleam/dict
 import gleam/erlang/process.{type Subject}
@@ -76,7 +81,7 @@ pub opaque type Msg {
   Subscribe(subject: Subject(BoardEvent), user: Int)
   Unsubscribe(subject: Subject(BoardEvent))
   Rerank
-  GetView(filters: rank.Filters, reply: Subject(rank.View))
+  GetView(filters: rank.Filters, reply: Subject(Result(rank.View, sys.Crash)))
   Backup
   Expire
   GetStatus(reply: Subject(Option(String)))
@@ -153,9 +158,13 @@ const call_timeout = 15_000
 /// Run a query against the current state.
 pub fn read(store: Store, query: fn(State, Ephemeral) -> a) -> a {
   let reply = process.new_subject()
-  process.send(store, Read(fn(s, e) { process.send(reply, query(s, e)) }))
+  process.send(
+    store,
+    Read(fn(s, e) { process.send(reply, sys.capture(fn() { query(s, e) })) }),
+  )
   case process.receive(reply, call_timeout) {
-    Ok(value) -> value
+    Ok(Ok(value)) -> value
+    Ok(Error(crash)) -> sys.reraise(crash)
     Error(_) -> panic as "store: read timed out"
   }
 }
@@ -181,22 +190,28 @@ pub fn update_or_pending(
 ) -> Result(#(a, Bool), String) {
   let reply = process.new_subject()
   let run = fn(s, e, now) {
-    case change(s, e, now) {
-      Changed(state:, eph:, effects:, value:) ->
+    case sys.capture(fn() { change(s, e, now) }) {
+      Ok(Changed(state:, eph:, effects:, value:)) ->
         Applied(Some(state), Some(eph), effects, fn(r) {
-          process.send(reply, #(value, result.is_ok(r)))
+          process.send(reply, Ok(#(value, result.is_ok(r))))
         })
-      EphemeralChanged(eph:, value:) ->
+      Ok(EphemeralChanged(eph:, value:)) ->
         Applied(None, Some(eph), [], fn(_) {
-          process.send(reply, #(value, True))
+          process.send(reply, Ok(#(value, True)))
         })
-      NoChange(value:) ->
-        Applied(None, None, [], fn(_) { process.send(reply, #(value, True)) })
+      Ok(NoChange(value:)) ->
+        Applied(None, None, [], fn(_) {
+          process.send(reply, Ok(#(value, True)))
+        })
+      Error(crash) -> crashed(reply, crash)
     }
   }
   process.send(store, Update(run, True))
-  process.receive(reply, call_timeout)
-  |> result.replace_error("storage: timed out waiting for the write")
+  case process.receive(reply, call_timeout) {
+    Ok(Ok(value)) -> Ok(value)
+    Ok(Error(crash)) -> sys.reraise(crash)
+    Error(_) -> Error("storage: timed out waiting for the write")
+  }
 }
 
 /// Apply a best-effort change and reply immediately.
@@ -215,22 +230,32 @@ fn send_update(
 ) -> Result(a, String) {
   let reply = process.new_subject()
   let run = fn(s, e, now) {
-    case change(s, e, now) {
-      Changed(state:, eph:, effects:, value:) ->
+    case sys.capture(fn() { change(s, e, now) }) {
+      Ok(Changed(state:, eph:, effects:, value:)) ->
         Applied(Some(state), Some(eph), effects, fn(r) {
-          process.send(reply, result.map(r, fn(_) { value }))
+          process.send(reply, Ok(result.map(r, fn(_) { value })))
         })
-      EphemeralChanged(eph:, value:) ->
-        Applied(None, Some(eph), [], fn(_) { process.send(reply, Ok(value)) })
-      NoChange(value:) ->
-        Applied(None, None, [], fn(_) { process.send(reply, Ok(value)) })
+      Ok(EphemeralChanged(eph:, value:)) ->
+        Applied(None, Some(eph), [], fn(_) {
+          process.send(reply, Ok(Ok(value)))
+        })
+      Ok(NoChange(value:)) ->
+        Applied(None, None, [], fn(_) { process.send(reply, Ok(Ok(value))) })
+      Error(crash) -> crashed(reply, crash)
     }
   }
   process.send(store, Update(run, durable))
   case process.receive(reply, call_timeout) {
-    Ok(value) -> value
+    Ok(Ok(value)) -> value
+    Ok(Error(crash)) -> sys.reraise(crash)
     Error(_) -> Error("storage: timed out waiting for the write")
   }
+}
+
+/// An update whose closure crashed: nothing changes, and the caller gets
+/// the crash to raise again.
+fn crashed(reply: Subject(Result(a, sys.Crash)), crash: sys.Crash) -> Applied {
+  Applied(None, None, [], fn(_) { process.send(reply, Error(crash)) })
 }
 
 pub fn subscribe(store: Store, subject: Subject(BoardEvent), user: Int) -> Nil {
@@ -245,7 +270,8 @@ pub fn view(store: Store, filters: rank.Filters) -> rank.View {
   let reply = process.new_subject()
   process.send(store, GetView(filters, reply))
   case process.receive(reply, call_timeout) {
-    Ok(v) -> v
+    Ok(Ok(v)) -> v
+    Ok(Error(crash)) -> sys.reraise(crash)
     Error(_) -> panic as "store: view timed out"
   }
 }
@@ -382,18 +408,33 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
           }
         })
       let self = Self(..self, subscribers: alive)
-      let #(_, visible) = compute_view(self, rank.no_filters(), now)
-      actor.continue(broadcast(Self(..self, visible:), BoardChanged))
-    }
-
-    GetView(filters, reply) -> {
-      let #(view, visible) = compute_view(self, filters, now)
-      process.send(reply, view)
-      case rank.is_default(filters) {
-        True -> actor.continue(Self(..self, visible:))
-        False -> actor.continue(self)
+      case sys.capture(fn() { compute_view(self, rank.no_filters(), now) }) {
+        Ok(#(_, visible)) ->
+          actor.continue(broadcast(Self(..self, visible:), BoardChanged))
+        Error(crash) -> {
+          logging.log(
+            logging.Error,
+            "store: ranking failed: " <> sys.describe_crash(crash),
+          )
+          actor.continue(self)
+        }
       }
     }
+
+    GetView(filters, reply) ->
+      case sys.capture(fn() { compute_view(self, filters, now) }) {
+        Ok(#(view, visible)) -> {
+          process.send(reply, Ok(view))
+          case rank.is_default(filters) {
+            True -> actor.continue(Self(..self, visible:))
+            False -> actor.continue(self)
+          }
+        }
+        Error(crash) -> {
+          process.send(reply, Error(crash))
+          actor.continue(self)
+        }
+      }
 
     Backup -> {
       let snapshot = self.state

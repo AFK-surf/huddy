@@ -1,12 +1,14 @@
 //// Live updates (§9.3): one process per open page. It subscribes to the
 //// store, re-renders the page's zones on change (coalesced over 250 ms),
 //// sends only zones whose HTML changed, forwards decision notifications,
-//// and pings every 25 s.
+//// and pings every 25 s. A restarted store has no subscribers, so with each
+//// ping the page checks the store is the one it subscribed to, and if not
+//// subscribes again and re-renders.
 
 import gleam/bit_array
 import gleam/bytes_tree
 import gleam/dict.{type Dict}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/list
@@ -29,6 +31,8 @@ type Conn {
   Conn(
     ctx: Ctx,
     subject: Subject(BoardEvent),
+    /// the store process subscribed to
+    store: Result(Pid, Nil),
     token_sha: String,
     user: User,
     filters: rank.Filters,
@@ -87,12 +91,14 @@ pub fn handle(
         req,
         response.new(200) |> response.set_header("x-accel-buffering", "no"),
         init: fn(subject) {
+          let owner = process.subject_owner(ctx.store)
           store.subscribe(ctx.store, subject, user.id)
           process.send_after(subject, 25_000, store.SseTick)
           process.send(subject, store.SseRender)
           Conn(
             ctx:,
             subject:,
+            store: owner,
             token_sha: sha,
             user:,
             filters:,
@@ -183,10 +189,28 @@ fn loop(
       }
     store.SseTick -> {
       process.send_after(c.subject, 25_000, store.SseTick)
+      let c = resubscribe(c)
       case send(conn, "ping", "") {
         Ok(_) -> actor.continue(c)
         Error(_) -> stop(c)
       }
     }
+  }
+}
+
+/// Subscribe again if the store restarted since the last check (it lost its
+/// subscribers, and maybe changes this page has not shown), and re-render.
+fn resubscribe(c: Conn) -> Conn {
+  case process.subject_owner(c.ctx.store) {
+    Ok(pid) if Ok(pid) != c.store -> {
+      store.subscribe(c.ctx.store, c.subject, c.user.id)
+      case c.pending {
+        True -> Nil
+        False -> process.send(c.subject, store.SseRender)
+      }
+      Conn(..c, store: Ok(pid), pending: True)
+    }
+    // the same store, or none right now (it is restarting): check next time
+    _ -> c
   }
 }
