@@ -1,5 +1,5 @@
 //// The single JSON state file: loading (with format upgrades and integrity
-//// checks), atomic writes, the single-instance lock, and daily backups.
+//// checks), atomic writes, and daily backups.
 ////
 //// Atomicity: every write goes to `<path>.tmp` in the same directory, is
 //// fsynced, then renamed over `<path>` (see `huddy_ffi:atomic_write/2`). The
@@ -18,20 +18,8 @@ import huddy/codec
 import huddy/model.{type State}
 import huddy/sys
 
-pub fn lock_path(path: String) -> String {
-  path <> ".lock"
-}
-
 pub fn tmp_path(path: String) -> String {
   path <> ".tmp"
-}
-
-pub fn acquire_lock(path: String) -> Result(Nil, String) {
-  sys.acquire_lock(lock_path(path))
-}
-
-pub fn release_lock(path: String) -> Nil {
-  sys.release_lock(lock_path(path))
 }
 
 /// Load the state file. A leftover `.tmp` is an unfinished write and is

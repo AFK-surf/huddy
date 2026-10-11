@@ -120,7 +120,7 @@ Literal values work too.
   },
   "server": { "listen": "0.0.0.0", "port": 8080, "trusted_proxies": ["10.0.0.0/8"] },
   "storage": {
-    "path": "/var/lib/huddy/huddy.json",       // the single state file; <path>.tmp and <path>.lock live next to it
+    "path": "/var/lib/huddy/huddy.json",       // the single state file; <path>.tmp lives next to it
     "backup_dir": "/var/lib/huddy/backups", "backup_keep": 7,
     "flush_ms": 100,                           // group-commit window
     "idle_flush_seconds": 5,                   // max delay for best-effort updates
@@ -357,13 +357,10 @@ the previous complete snapshot or the new complete snapshot, never a mix:
    `fsync(dirfd)` is the escape hatch if that ever matters.
 
 Guards around the procedure:
-- **Single instance.** At boot Huddy creates `<path>.lock` with
-  `[write, exclusive]` and writes its identity into it: OS pid, process start
-  time and boot id (from `/proc`). If the lock already exists and that exact
-  process is still running (same boot, same start time for the pid), Huddy
-  refuses to start. Otherwise the lock is stale and gets replaced, including
-  when the pid was reused after a reboot or container restart. Two writers can
-  never race on the file.
+- **Single instance.** Huddy assumes it is the only process using the state
+  file and does not guard against parallel instances (there is no lock file).
+  Running two instances on the same file is unsupported and will lose writes;
+  the deployment must ensure a single instance.
 - **Boot.** A leftover `<path>.tmp` is deleted unread, since it is by definition
   an unfinished write. A missing `<path>` with no backups starts an empty state.
   A `<path>` that fails to decode makes Huddy **refuse to start**, naming the
@@ -985,13 +982,13 @@ huddy.example.json            annotated-by-example production config
 Dockerfile                    two-stage build → erlang:29-slim
 priv/static/                  huddy.css  huddy.js  excalifont.woff2  nunito.woff2  favicon.svg
 src/
-  huddy.gleam                 main: load config → lock → load → supervise store, janitor, mist
-  huddy_ffi.erl               atomic write, lock file, DNS, SMTP (gen_smtp), rate limiter, time
+  huddy.gleam                 main: load config → load → supervise store, janitor, mist
+  huddy_ffi.erl               atomic write, DNS, SMTP (gen_smtp), rate limiter, time
   huddy/sys.gleam             bindings for huddy_ffi + token/hash helpers
   huddy/config.gleam          decoders, validation, $env resolution
   huddy/model.gleam           User, Agent, Item, Finding, OAuth records, State …
   huddy/codec.gleam           State ⇄ JSON (format 1), referential-integrity check
-  huddy/persist.gleam         load (upgrades, integrity), atomic write, lock, backups
+  huddy/persist.gleam         load (upgrades, integrity), atomic write, backups
   huddy/state.gleam           pure mutations on State (items, findings, OAuth, retention)
   huddy/ephemeral.gleam       in-memory-only data (login codes, OAuth codes, MCP sessions)
   huddy/store.gleam           store actor: read / update (durable) / update_lazy, group commit, pubsub
@@ -1024,8 +1021,9 @@ use a fake model and record e-mails.
 Deployment uses a two-stage Docker image. The build stage runs
 `gleam export erlang-shipment` with Gleam on OTP 29; the runtime stage is
 `erlang:29-slim`. It needs one volume, for the state file and backups. The
-volume must be a local POSIX filesystem: the atomic rename and the lock file
-assume it, and network filesystems don't reliably provide either.
+volume must be a local POSIX filesystem: the atomic rename assumes it, and
+network filesystems don't reliably provide it. Run exactly one instance per
+state file; Huddy does not detect a second one.
 TLS terminates at a reverse proxy, and `trusted_proxies` makes client IPs
 correct for rate limits.
 
@@ -1039,7 +1037,7 @@ clients).
 
 | # | Scope | Done when |
 |---|---|---|
-| M0 | Skeleton: config, JSON storage (atomic writes, lock, group commit, backups), email-code login, empty page, SSE ping | Allowlisted login works end to end with `email.transport: log` |
+| M0 | Skeleton: config, JSON storage (atomic writes, group commit, backups), email-code login, empty page, SSE ping | Allowlisted login works end to end with `email.transport: log` |
 | M1 | Board: items via MCP (**secret URL only**), deterministic ranking, sketch rendering, live SSE swaps, "seen" and "hide" | An agent posts a goal, tasks and decisions, and the page updates live |
 | M2 | Review: write-time review, sweeps, findings in responses and piggybacked, inbox, dismissals | Findings flow end to end; thresholds tuned from a week of dismissal data |
 | M3 | OAuth AS: PRM, AS metadata, CIMD + DCR, consent, rotation, revoke UI | Claude Code and Codex connect over OAuth without a secret URL |

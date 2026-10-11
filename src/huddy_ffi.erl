@@ -1,8 +1,7 @@
 -module(huddy_ffi).
 
 -export([now_ms/0, os_pid/0, getenv/1, atomic_write/2, read_file/1, delete_file/1,
-         file_exists/1, ensure_dir/1, list_dir/1, acquire_lock/1, release_lock/1,
-         lock_identity/1,
+         file_exists/1, ensure_dir/1, list_dir/1, 
          utc_date_compact/1, rfc2822_date/1, getaddrs/1, send_email/5,
          limiter_init/0, rate_take/4, file_size/1, halt/1, rescue/1,
          configure_proxy/0]).
@@ -77,86 +76,6 @@ list_dir(Dir) ->
         {ok, Names} -> {ok, [unicode:characters_to_binary(N) || N <- Names]};
         {error, Reason} -> {error, reason_to_binary(Reason)}
     end.
-
-%% Single-instance lock: create Lock exclusively and write our identity into it:
-%% "<os pid> <process start time> <boot id>" (the last two from /proc on Linux).
-%% The lock is live only while that exact process is still running. A bare pid
-%% would not do: after a reboot or container restart the recorded pid is often
-%% reused by an unrelated process (with small, deterministic pids in a fresh VM
-%% or container), and huddy would refuse to start until the lock was removed.
-%% Legacy locks holding only a pid fall back to the plain /proc/<pid> check.
-acquire_lock(Lock) ->
-    Me = lock_identity(os_pid()),
-    case file:open(Lock, [write, exclusive, raw, binary]) of
-        {ok, Fd} ->
-            ok = file:write(Fd, Me),
-            ok = file:sync(Fd),
-            ok = file:close(Fd),
-            {ok, nil};
-        {error, eexist} ->
-            case file:read_file(Lock) of
-                {ok, Other} ->
-                    case lock_holder_alive(Other) of
-                        {true, OtherPid} ->
-                            {error, <<"another huddy process (pid ", OtherPid/binary,
-                                      ") holds ", Lock/binary>>};
-                        false ->
-                            _ = file:delete(Lock),
-                            acquire_lock(Lock)
-                    end;
-                {error, Reason} -> {error, reason_to_binary(Reason)}
-            end;
-        {error, Reason} -> {error, reason_to_binary(Reason)}
-    end.
-
-lock_identity(Pid) ->
-    iolist_to_binary(lists:join(<<" ">>, [Pid, proc_start_time(Pid), boot_id()])).
-
-lock_holder_alive(Content) ->
-    Me = os_pid(),
-    Fields = binary:split(string:trim(Content), [<<" ">>, <<"\n">>], [global, trim_all]),
-    Alive = case Fields of
-        [] -> false;
-        [Me | _] -> false;
-        [Pid] -> filelib:is_dir(<<"/proc/", Pid/binary>>);
-        [Pid, Start | Rest] ->
-            SameBoot = case Rest of
-                [Boot | _] -> Boot =:= boot_id();
-                [] -> true
-            end,
-            SameBoot andalso proc_start_time(Pid) =:= Start
-    end,
-    case Alive of
-        true -> {true, hd(Fields)};
-        false -> false
-    end.
-
-%% Field 22 of /proc/<pid>/stat (start time in clock ticks since boot), or <<>>.
-proc_start_time(Pid) ->
-    case file:read_file(<<"/proc/", Pid/binary, "/stat">>) of
-        {ok, Stat} ->
-            %% the command name (field 2) may contain spaces; skip past its ")"
-            case binary:split(Stat, <<")">>, [global]) of
-                [_ | _] = Parts ->
-                    Fields = binary:split(lists:last(Parts), <<" ">>, [global, trim_all]),
-                    case length(Fields) >= 20 of
-                        true -> lists:nth(20, Fields);
-                        false -> <<>>
-                    end;
-                _ -> <<>>
-            end;
-        {error, _} -> <<>>
-    end.
-
-boot_id() ->
-    case file:read_file(<<"/proc/sys/kernel/random/boot_id">>) of
-        {ok, Id} -> string:trim(Id);
-        {error, _} -> <<>>
-    end.
-
-release_lock(Lock) ->
-    _ = file:delete(Lock),
-    nil.
 
 utc_date_compact(Ms) ->
     {{Y, M, D}, _} = calendar:system_time_to_universal_time(Ms, millisecond),
