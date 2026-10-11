@@ -138,6 +138,9 @@ send_email(Opts, From, To, Subject, Body) ->
     Host = binary_to_list(maps:get(host, Opts)),
     Tls = maps:get(tls, Opts),
     TlsOptions = [{verify, verify_peer},
+                  %% gen_smtp defaults to {depth, 0}, which rejects any chain
+                  %% with an intermediate CA (i.e. nearly every public server).
+                  {depth, 10},
                   {cacerts, public_key:cacerts_get()},
                   {server_name_indication, Host},
                   {customize_hostname_check,
