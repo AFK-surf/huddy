@@ -9,6 +9,11 @@
 //// - `update_lazy` applies a best-effort change and replies immediately;
 ////   it is flushed with the next batch or within `idle_flush_seconds`.
 ////
+//// The store loads the state itself, in a process of its own, so starting or
+//// restarting it never waits on storage (which, in S3, can take minutes).
+//// Until the state is in, requests wait in the store, and a failed load is
+//// retried.
+////
 //// A closure that crashes does not crash the actor: the exception is sent
 //// back and raised again in the caller, so a bug in one request fails that
 //// request instead of restarting the store (which would drop un-flushed
@@ -85,6 +90,9 @@ pub opaque type Msg {
   Backup
   Expire
   GetStatus(reply: Subject(Option(String)))
+  /// Load the state again after a failed load.
+  Load
+  Loaded(result: Result(State, String))
 }
 
 type Waiting {
@@ -109,13 +117,23 @@ type Self {
     subscribers: List(#(Subject(BoardEvent), Int)),
     visible: rank.Visible,
     size_warned_at: Int,
+    load: fn() -> Result(State, String),
+    /// Some until the state is loaded
+    loading: Option(Loading),
   )
 }
 
-/// Start the store under `name`, so its subject survives restarts.
+/// Messages that need the state, waiting for it (newest first, with when
+/// they arrived), and how many loads have failed so far.
+type Loading {
+  Loading(waiting: List(#(Int, Msg)), failures: Int)
+}
+
+/// Start the store under `name`, so its subject survives restarts. `load`
+/// reads the state; it runs in a process of its own after the store is up.
 pub fn start(
   config: Config,
-  initial: State,
+  load: fn() -> Result(State, String),
   name: process.Name(Msg),
 ) -> actor.StartResult(Store) {
   actor.new_with_initialiser(5000, fn(subject) {
@@ -123,7 +141,7 @@ pub fn start(
       Self(
         config:,
         subject:,
-        state: initial,
+        state: model.empty_state(),
         eph: ephemeral.new(),
         dirty: False,
         writing: False,
@@ -135,13 +153,10 @@ pub fn start(
         subscribers: [],
         visible: rank.no_visible(),
         size_warned_at: 0,
+        load:,
+        loading: Some(Loading(waiting: [], failures: 0)),
       )
-    process.send_after(
-      subject,
-      config.display.rerank_interval_seconds * 1000,
-      Rerank,
-    )
-    process.send_after(subject, 60_000, Expire)
+    start_load(self)
     actor.initialised(self)
     |> actor.returning(subject)
     |> Ok
@@ -288,11 +303,92 @@ pub fn flush(store: Store) -> Result(Nil, String) {
 // --- actor ---------------------------------------------------------------------
 
 fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
+  case self.loading {
+    None -> actor.continue(step(self, msg))
+    Some(loading) -> actor.continue(while_loading(self, loading, msg))
+  }
+}
+
+/// Requests held back while loading are dropped once their caller has
+/// given up waiting (after `call_timeout`), rather than applied behind its
+/// back.
+const held_ms = 14_000
+
+fn start_load(self: Self) -> Nil {
+  let subject = self.subject
+  let load = self.load
+  process.spawn(fn() {
+    let result = case sys.rescue(load) {
+      Ok(r) -> r
+      Error(e) -> Error(e)
+    }
+    process.send(subject, Loaded(result))
+  })
+  Nil
+}
+
+/// Before the state is loaded, subscriptions and the status are handled at
+/// once and everything else waits for the state.
+fn while_loading(self: Self, loading: Loading, msg: Msg) -> Self {
+  let now = sys.now_ms()
+  case msg {
+    Loaded(Ok(state)) -> {
+      case loading.failures {
+        0 -> Nil
+        _ -> logging.log(logging.Notice, "storage: state file loaded")
+      }
+      process.send_after(
+        self.subject,
+        self.config.display.rerank_interval_seconds * 1000,
+        Rerank,
+      )
+      process.send_after(self.subject, 60_000, Expire)
+      let self = Self(..self, state:, loading: None, storage_error: None)
+      list.fold(list.reverse(held(loading.waiting, now)), self, fn(acc, w) {
+        step(acc, w.1)
+      })
+    }
+    Loaded(Error(reason)) -> {
+      let failures = loading.failures + 1
+      let delay = int.min(30_000, 500 * pow2(failures))
+      logging.log(
+        logging.Error,
+        "storage: cannot load the state file (retrying in "
+          <> int.to_string(delay / 1000)
+          <> " s): "
+          <> reason,
+      )
+      process.send_after(self.subject, delay, Load)
+      Self(
+        ..self,
+        loading: Some(Loading(..loading, failures:)),
+        storage_error: Some(reason),
+      )
+    }
+    Load -> {
+      start_load(self)
+      self
+    }
+    Subscribe(..) | Unsubscribe(..) | GetStatus(..) -> step(self, msg)
+    _ -> {
+      let waiting = [#(now, msg), ..held(loading.waiting, now)]
+      Self(..self, loading: Some(Loading(..loading, waiting:)))
+    }
+  }
+}
+
+/// The waiting messages whose callers are still waiting.
+fn held(waiting: List(#(Int, Msg)), now: Int) -> List(#(Int, Msg)) {
+  list.filter(waiting, fn(w) { now - w.0 < held_ms })
+}
+
+/// Handle one message once the state is loaded.
+fn step(self: Self, msg: Msg) -> Self {
   let now = sys.now_ms()
   case msg {
     Read(run) -> {
       run(self.state, self.eph)
-      actor.continue(self)
+      self
     }
 
     Update(run, durable) -> {
@@ -305,7 +401,7 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
       case new_state {
         None -> {
           reply(Ok(Nil))
-          actor.continue(self)
+          self
         }
         Some(s) -> {
           let self = Self(..self, state: s, dirty: True)
@@ -313,16 +409,12 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
             True -> {
               let self =
                 Self(..self, pending: [Waiting(reply, effects), ..self.pending])
-              actor.continue(schedule(self, self.config.storage.flush_ms, now))
+              schedule(self, self.config.storage.flush_ms, now)
             }
             False -> {
               reply(Ok(Nil))
               let self = run_effects(self, effects)
-              actor.continue(schedule(
-                self,
-                self.config.storage.idle_flush_seconds * 1000,
-                now,
-              ))
+              schedule(self, self.config.storage.idle_flush_seconds * 1000, now)
             }
           }
         }
@@ -332,8 +424,8 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
     Flush -> {
       let self = Self(..self, flush_at: None)
       case self.writing, self.dirty {
-        False, True -> actor.continue(start_write(self, now))
-        _, _ -> actor.continue(self)
+        False, True -> start_write(self, now)
+        _, _ -> self
       }
     }
 
@@ -363,9 +455,8 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
           }
           let self = check_size(self, size, now)
           case self.dirty {
-            True ->
-              actor.continue(schedule(self, self.config.storage.flush_ms, now))
-            False -> actor.continue(self)
+            True -> schedule(self, self.config.storage.flush_ms, now)
+            False -> self
           }
         }
         Error(reason) -> {
@@ -375,22 +466,18 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
           let self =
             Self(..self, dirty: True, failures:, storage_error: Some(reason))
           let self = broadcast(self, BoardChanged)
-          actor.continue(schedule(self, delay, now))
+          schedule(self, delay, now)
         }
       }
     }
 
     Subscribe(subject, user) ->
-      actor.continue(
-        Self(..self, subscribers: [#(subject, user), ..self.subscribers]),
-      )
+      Self(..self, subscribers: [#(subject, user), ..self.subscribers])
 
     Unsubscribe(subject) ->
-      actor.continue(
-        Self(
-          ..self,
-          subscribers: list.filter(self.subscribers, fn(s) { s.0 != subject }),
-        ),
+      Self(
+        ..self,
+        subscribers: list.filter(self.subscribers, fn(s) { s.0 != subject }),
       )
 
     Rerank -> {
@@ -409,14 +496,13 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
         })
       let self = Self(..self, subscribers: alive)
       case sys.capture(fn() { compute_view(self, rank.no_filters(), now) }) {
-        Ok(#(_, visible)) ->
-          actor.continue(broadcast(Self(..self, visible:), BoardChanged))
+        Ok(#(_, visible)) -> broadcast(Self(..self, visible:), BoardChanged)
         Error(crash) -> {
           logging.log(
             logging.Error,
             "store: ranking failed: " <> sys.describe_crash(crash),
           )
-          actor.continue(self)
+          self
         }
       }
     }
@@ -426,13 +512,13 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
         Ok(#(view, visible)) -> {
           process.send(reply, Ok(view))
           case rank.is_default(filters) {
-            True -> actor.continue(Self(..self, visible:))
-            False -> actor.continue(self)
+            True -> Self(..self, visible:)
+            False -> self
           }
         }
         Error(crash) -> {
           process.send(reply, Error(crash))
-          actor.continue(self)
+          self
         }
       }
 
@@ -447,18 +533,20 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
           Error(e) -> logging.log(logging.Error, "backup failed: " <> e)
         }
       })
-      actor.continue(self)
+      self
     }
 
     GetStatus(reply) -> {
       process.send(reply, self.storage_error)
-      actor.continue(self)
+      self
     }
 
     Expire -> {
       process.send_after(self.subject, 60_000, Expire)
-      actor.continue(Self(..self, eph: ephemeral.expire(self.eph, now)))
+      Self(..self, eph: ephemeral.expire(self.eph, now))
     }
+
+    Load | Loaded(_) -> self
   }
 }
 

@@ -345,7 +345,11 @@ pub fn a_failed_write_keeps_the_value_test() {
       ),
     )
   let assert Ok(started) =
-    store.start(cfg, model.empty_state(), process.new_name("test_store"))
+    store.start(
+      cfg,
+      fn() { Ok(model.empty_state()) },
+      process.new_name("test_store"),
+    )
   let s = started.data
   // the change is in memory and retried; the caller still learns the value
   assert store.update_or_pending(s, fn(st, e, _) { store.Changed(st, e, [], 7) })

@@ -1,14 +1,20 @@
 import gleam/dict
 import gleam/erlang/process
+import gleam/option.{None, Some}
 import huddy/model
 import huddy/state
 import huddy/store
+import huddy/sys
 import support
 
 fn start_store() -> store.Store {
   let cfg = support.config(support.tmp_dir(), 0)
   let assert Ok(started) =
-    store.start(cfg, model.empty_state(), process.new_name("store_test"))
+    store.start(
+      cfg,
+      fn() { Ok(model.empty_state()) },
+      process.new_name("store_test"),
+    )
   started.data
 }
 
@@ -57,4 +63,50 @@ pub fn crashing_closures_fail_the_caller_not_the_store_test() {
   assert process.subject_owner(s) == Ok(pid)
   assert users(s) == 1
   let assert Ok(Nil) = store.flush(s)
+}
+
+pub fn a_slow_load_does_not_hold_up_the_start_test() {
+  let cfg = support.config(support.tmp_dir(), 0)
+  let started_at = sys.now_ms()
+  let assert Ok(started) =
+    store.start(
+      cfg,
+      fn() {
+        process.sleep(1000)
+        Ok(model.empty_state())
+      },
+      process.new_name("store_test"),
+    )
+  assert sys.now_ms() - started_at < 500
+  // A change sent while loading is applied once the state is in.
+  let assert Ok(Nil) =
+    store.update(started.data, fn(st, e, now) {
+      let #(st, _) = state.create_user(st, "alice@acme.dev", now)
+      store.Changed(st, e, [], Nil)
+    })
+  assert users(started.data) == 1
+}
+
+pub fn a_failed_load_is_retried_test() {
+  let dir = support.tmp_dir()
+  let cfg = support.config(dir, 0)
+  let ready = dir <> "/ready"
+  let assert Ok(started) =
+    store.start(
+      cfg,
+      fn() {
+        case sys.file_exists(ready) {
+          True -> Ok(model.empty_state())
+          False -> Error("storage is down")
+        }
+      },
+      process.new_name("store_test"),
+    )
+  let s = started.data
+  process.sleep(100)
+  assert store.status(s) == Some("storage is down")
+  support.write_file(ready, <<>>)
+  // waits for the retry
+  assert users(s) == 0
+  assert store.status(s) == None
 }
