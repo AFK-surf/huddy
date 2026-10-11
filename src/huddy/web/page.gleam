@@ -160,6 +160,7 @@ fn header(ctx: Ctx, board: Board) -> String {
             [html.text("🔔 notify me")],
           )
         }),
+        html.a("/docs", [], [html.text("docs")]),
         html.a("/settings", [], [html.text("you: " <> board.viewer.handle)]),
       ]),
       html.span(
@@ -417,6 +418,7 @@ fn hide_control(board: Board, v: ItemView) -> Node {
 
 fn flags(v: ItemView) -> Node {
   html.fragment([
+    doc_links(v),
     case v.overlap {
       Some(#(id, title, label)) ->
         html.div([html.class("sub")], [
@@ -434,6 +436,24 @@ fn flags(v: ItemView) -> Node {
       None -> html.none()
     },
   ])
+}
+
+/// Links to the item's documents.
+fn doc_links(v: ItemView) -> Node {
+  case v.docs {
+    [] -> html.none()
+    docs ->
+      html.div(
+        [html.class("docs")],
+        list.map(docs, fn(d) {
+          let ref = model.doc_ref(d.0)
+          html.a("/docs/" <> ref, [html.class("doclink")], [
+            icon(sketch.DocIcon, ref),
+            html.text(d.1),
+          ])
+        }),
+      )
+  }
 }
 
 fn detail(text: String, cls: String) -> Node {
@@ -538,6 +558,7 @@ fn goal(g: rank.GoalGroup) -> Node {
         Some("goal-bg"),
       )),
       html.text(p.item.title),
+      doc_links(p),
     ]),
     html.div(
       [html.class("who")],

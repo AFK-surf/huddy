@@ -33,10 +33,7 @@ pub fn tmp_path(path: String) -> String {
 /// An undecodable file is an error naming the newest backup.
 pub fn load(path: Location, backup_dir: Location) -> Result(State, String) {
   let name = blob.to_string(path)
-  let _ = case path {
-    blob.File(file) -> sys.delete_file(tmp_path(file))
-    blob.Object(..) -> Ok(Nil)
-  }
+  let _ = blob.discard_partial(path)
   case blob.read(path) {
     Error("enoent") ->
       case newest_backup(backup_dir) {

@@ -304,30 +304,39 @@ fn post(
   req: Request(mist.Connection),
   auth: Auth,
 ) -> Response(mist.ResponseData) {
-  case mist.read_body(req, 1_048_576) {
-    Error(_) ->
-      respond(
-        413,
-        rpc_error(NoId, -32_600, "request body too large or unreadable", None),
-        [],
-      )
-    Ok(req) ->
-      case parse(req.body) {
+  // Authenticate (headers and path only) before reading the body: the body
+  // limit is large, since documents can be uploaded as base64 in a tool call.
+  let limit =
+    int.max(1_048_576, ctx.config.limits.document_max_mb * 1_400_000 + 65_536)
+  case authenticate(ctx, req, auth) {
+    Error(resp) -> resp
+    Ok(principal) ->
+      case mist.read_body(req, limit) {
         Error(_) ->
           respond(
-            400,
+            413,
             rpc_error(
               NoId,
-              -32_700,
-              "parse error: expected one JSON-RPC message",
+              -32_600,
+              "request body too large or unreadable",
               None,
             ),
             [],
           )
-        Ok(rpc) ->
-          case authenticate(ctx, req, auth) {
-            Error(resp) -> resp
-            Ok(principal) ->
+        Ok(req) ->
+          case parse(req.body) {
+            Error(_) ->
+              respond(
+                400,
+                rpc_error(
+                  NoId,
+                  -32_700,
+                  "parse error: expected one JSON-RPC message",
+                  None,
+                ),
+                [],
+              )
+            Ok(rpc) ->
               case rpc.id, meta_string(rpc.params, meta_version) {
                 // notifications (no id) are accepted and ignored
                 NoId, _ -> empty(202, [])
@@ -601,7 +610,13 @@ fn dispatch(
           let result = tools.call(ctx, principal, client_name, name, args)
           log_tool(principal, name, result.is_error)
           ok([
-            #("content", json.array([text_content(result.text)], fn(x) { x })),
+            #(
+              "content",
+              json.preprocessed_array([
+                text_content(result.text),
+                ..result.extra
+              ]),
+            ),
             #("structuredContent", result.structured),
             #("isError", json.bool(result.is_error)),
           ])

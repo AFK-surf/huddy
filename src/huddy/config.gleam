@@ -42,6 +42,8 @@ pub type Storage {
     path: Location,
     backup_dir: Location,
     backup_keep: Int,
+    /// where document files live (default: `documents` next to `path`)
+    documents_dir: Location,
     flush_ms: Int,
     idle_flush_seconds: Int,
     warn_mb: Int,
@@ -137,6 +139,8 @@ pub type Limits {
     title_max_chars: Int,
     detail_max_chars: Int,
     writes_per_agent_per_minute: Int,
+    /// total size of a document's files, unzipped
+    document_max_mb: Int,
   )
 }
 
@@ -258,7 +262,7 @@ pub fn decoder() -> Decoder(Config) {
   use review <- section("review", review_decoder(), default_review())
   use notify <- section("notify", notify_decoder(), Notify(browser: True))
   use display <- section("display", display_decoder(), default_display())
-  use limits <- section("limits", limits_decoder(), Limits(120, 2000, 12))
+  use limits <- section("limits", limits_decoder(), Limits(120, 2000, 12, 20))
   use retention <- section(
     "retention",
     retention_decoder(),
@@ -298,6 +302,11 @@ fn storage_decoder() -> Decoder(Storage) {
   use s3 <- section("s3", s3_decoder(), default_s3())
   use path <- decode.field("path", location(s3))
   use backup_dir <- opt("backup_dir", None, decode.map(location(s3), Some))
+  use documents_dir <- opt(
+    "documents_dir",
+    None,
+    decode.map(location(s3), Some),
+  )
   use backup_keep <- opt("backup_keep", 7, decode.int)
   use flush_ms <- opt("flush_ms", 100, decode.int)
   use idle_flush_seconds <- opt("idle_flush_seconds", 5, decode.int)
@@ -306,10 +315,15 @@ fn storage_decoder() -> Decoder(Storage) {
     option.lazy_unwrap(backup_dir, fn() {
       blob.child(blob.parent(path), "backups")
     })
+  let documents_dir =
+    option.lazy_unwrap(documents_dir, fn() {
+      blob.child(blob.parent(path), "documents")
+    })
   decode.success(Storage(
     path:,
     backup_dir:,
     backup_keep:,
+    documents_dir:,
     flush_ms:,
     idle_flush_seconds:,
     warn_mb:,
@@ -645,10 +659,12 @@ fn limits_decoder() -> Decoder(Limits) {
   use t <- opt("title_max_chars", 120, decode.int)
   use d <- opt("detail_max_chars", 2000, decode.int)
   use w <- opt("writes_per_agent_per_minute", 12, decode.int)
+  use m <- opt("document_max_mb", 20, decode.int)
   decode.success(Limits(
     title_max_chars: t,
     detail_max_chars: d,
     writes_per_agent_per_minute: w,
+    document_max_mb: m,
   ))
 }
 
@@ -708,6 +724,10 @@ fn validate(config: Config) -> Result(Config, String) {
     },
   )
   use _ <- result.try(validate_storage(config.storage))
+  use _ <- result.try(case config.limits.document_max_mb {
+    n if n >= 1 && n <= 1000 -> Ok(Nil)
+    _ -> Error("config: limits.document_max_mb must be between 1 and 1000")
+  })
   use _ <- result.try(
     case config.decision_model.enabled, config.decision_model.api_key {
       True, "" ->
@@ -722,7 +742,7 @@ fn validate(config: Config) -> Result(Config, String) {
 
 fn validate_storage(storage: Storage) -> Result(Nil, String) {
   let objects =
-    [storage.path, storage.backup_dir]
+    [storage.path, storage.backup_dir, storage.documents_dir]
     |> list.filter_map(fn(location) {
       case location {
         blob.Object(s3:, ..) -> Ok(s3)

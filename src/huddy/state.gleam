@@ -6,13 +6,14 @@ import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/result
 import gleam/string
 import huddy/model.{
-  type Agent, type Finding, type FindingKind, type Item, type ItemState,
-  type Kind, type McpLink, type OAuthGrant, type OAuthToken, type State,
-  type User, Agent, Event, Finding, Item, Judgment, McpLink, OAuthGrant,
-  OAuthToken, State, User, WebSession,
+  type Agent, type DocFile, type Document, type Finding, type FindingKind,
+  type Item, type ItemState, type Kind, type McpLink, type OAuthGrant,
+  type OAuthToken, type State, type User, Agent, Document, Event, Finding, Item,
+  Judgment, McpLink, OAuthGrant, OAuthToken, State, User, WebSession,
 }
 
 const day_ms = 86_400_000
@@ -309,6 +310,10 @@ pub fn touch_agent(state: State, agent_id: Int, now: Int) -> State {
   }
 }
 
+pub fn get_agent(state: State, id: Int) -> Option(Agent) {
+  dict.get(state.agents, id) |> option.from_result
+}
+
 pub fn agent_label(state: State, agent_id: Int) -> String {
   case dict.get(state.agents, agent_id) {
     Ok(a) -> model.agent_label(handle_of(state, a.owner), a)
@@ -349,6 +354,8 @@ pub type NewItem {
     detail: String,
     blocking: Bool,
     options: List(String),
+    /// linked documents; must exist (see `check_docs`)
+    docs: List(Int),
   )
 }
 
@@ -391,6 +398,7 @@ pub fn create_item(
       seen_at: None,
       hidden_by: None,
       hidden_note: None,
+      docs: list.unique(new.docs),
       version: 1,
       created_at: now,
       updated_at: now,
@@ -416,6 +424,8 @@ pub type Edit {
     blocking: Option(Bool),
     options: Option(List(String)),
     state: Option(ItemState),
+    /// replaces the linked documents; must exist (see `check_docs`)
+    docs: Option(List(Int)),
   )
 }
 
@@ -483,11 +493,14 @@ pub fn edit_item(
     model.Decision -> option.unwrap(edit.options, item.options)
     _ -> []
   }
+  let docs = option.map(edit.docs, list.unique) |> option.unwrap(item.docs)
+  use _ <- result.try(check_docs(state, docs))
   let content_changed =
     title != item.title
     || detail != item.detail
     || blocking != item.blocking
     || options != item.options
+    || docs != item.docs
   let actor = agent_actor(agent_id)
   let state = case content_changed {
     True -> {
@@ -498,6 +511,7 @@ pub fn edit_item(
           detail:,
           blocking:,
           options:,
+          docs:,
           version: item.version + 1,
           updated_at: now,
         )
@@ -560,6 +574,161 @@ fn close_item(
     "item_closed",
     model.state_to_string(to),
   )
+}
+
+// --- documents ----------------------------------------------------------------
+
+pub fn get_document(state: State, id: Int) -> Option(Document) {
+  dict.get(state.documents, id) |> option.from_result
+}
+
+/// All documents, most recently updated first.
+pub fn documents(state: State) -> List(Document) {
+  dict.values(state.documents)
+  |> list.sort(fn(a, b) {
+    case int.compare(b.updated_at, a.updated_at) {
+      order.Eq -> int.compare(b.id, a.id)
+      o -> o
+    }
+  })
+}
+
+/// Every id must name an existing document.
+pub fn check_docs(state: State, ids: List(Int)) -> Result(Nil, String) {
+  case list.find(ids, fn(id) { !dict.has_key(state.documents, id) }) {
+    Ok(id) ->
+      Error(
+        "No document "
+        <> model.doc_ref(id)
+        <> ". List documents with huddy_doc_list.",
+      )
+    Error(_) -> Ok(Nil)
+  }
+}
+
+/// Items (open or closed) that link to a document, newest first.
+pub fn items_with_doc(state: State, doc_id: Int) -> List(Item) {
+  dict.values(state.items)
+  |> list.filter(fn(i) { list.contains(i.docs, doc_id) })
+  |> list.sort(fn(a, b) { int.compare(b.updated_at, a.updated_at) })
+}
+
+pub type NewDocument {
+  NewDocument(
+    title: String,
+    files: List(DocFile),
+    storage_key: String,
+    /// replace this document (it must be the agent's own) instead of
+    /// creating one
+    replaces: Option(Int),
+  )
+}
+
+/// Store a new document, or a new version of one of the agent's documents.
+/// Returns the document and, for a new version, the storage key of the
+/// version it replaced (whose files the caller deletes).
+pub fn put_document(
+  state: State,
+  agent_id: Int,
+  new: NewDocument,
+  now: Int,
+) -> Result(#(State, Document, Option(String)), String) {
+  let size = list.fold(new.files, 0, fn(n, f) { n + f.size })
+  let actor = agent_actor(agent_id)
+  case new.replaces {
+    None -> {
+      let #(state, id) =
+        bump(state, fn(n) {
+          #(n.document, model.NextIds(..n, document: n.document + 1))
+        })
+      let doc =
+        Document(
+          id:,
+          agent: agent_id,
+          title: new.title,
+          files: new.files,
+          size:,
+          storage_key: new.storage_key,
+          version: 1,
+          created_at: now,
+          updated_at: now,
+        )
+      let state =
+        State(..state, documents: dict.insert(state.documents, id, doc))
+        |> touch_agent(agent_id, now)
+        |> add_event(now, actor, None, "doc_uploaded", doc_event(doc))
+      Ok(#(state, doc, None))
+    }
+    Some(id) -> {
+      use old <- result.try(
+        get_document(state, id)
+        |> option.to_result("No document " <> model.doc_ref(id) <> "."),
+      )
+      use _ <- result.try(case old.agent == agent_id {
+        True -> Ok(Nil)
+        False ->
+          Error(
+            model.doc_ref(id)
+            <> " was uploaded by "
+            <> agent_label(state, old.agent)
+            <> "; only that agent can replace it. Upload a new document instead.",
+          )
+      })
+      let doc =
+        Document(
+          ..old,
+          title: new.title,
+          files: new.files,
+          size:,
+          storage_key: new.storage_key,
+          version: old.version + 1,
+          updated_at: now,
+        )
+      let state =
+        State(..state, documents: dict.insert(state.documents, id, doc))
+        |> touch_agent(agent_id, now)
+        |> add_event(now, actor, None, "doc_replaced", doc_event(doc))
+      Ok(#(state, doc, Some(old.storage_key)))
+    }
+  }
+}
+
+fn doc_event(doc: Document) -> String {
+  model.doc_ref(doc.id)
+  <> " v"
+  <> int.to_string(doc.version)
+  <> ": "
+  <> doc.title
+}
+
+/// A human deletes a document; items that linked to it lose the link.
+pub fn delete_document(
+  state: State,
+  id: Int,
+  by_user: Int,
+  now: Int,
+) -> Result(#(State, Document), String) {
+  use doc <- result.try(
+    get_document(state, id)
+    |> option.to_result("No document " <> model.doc_ref(id) <> "."),
+  )
+  let items =
+    dict.map_values(state.items, fn(_, i) {
+      case list.contains(i.docs, id) {
+        True -> Item(..i, docs: list.filter(i.docs, fn(d) { d != id }))
+        False -> i
+      }
+    })
+  let state =
+    State(..state, items:, documents: dict.delete(state.documents, id))
+    |> add_event(
+      now,
+      user_actor(by_user),
+      None,
+      "doc_deleted",
+      model.doc_ref(id) <> ": " <> doc.title,
+    )
+  Ok(#(state, doc))
 }
 
 pub fn mark_seen(

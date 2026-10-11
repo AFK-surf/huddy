@@ -61,7 +61,7 @@ pub fn new_goal_replaces_old_goal_test() {
 pub fn agents_only_edit_their_own_items_test() {
   let #(s, a, b) = support.two_agents(now)
   let #(s, t) = state.create_item(s, a, support.task("Mine"), now)
-  let edit = state.Edit(Some("Stolen"), None, None, None, None)
+  let edit = state.Edit(Some("Stolen"), None, None, None, None, None)
   let assert Error(message) = state.edit_item(s, b, t.id, edit, now)
   assert string.contains(message, "only change their own")
 }
@@ -69,7 +69,7 @@ pub fn agents_only_edit_their_own_items_test() {
 pub fn closing_states_follow_kind_test() {
   let #(s, a, _) = support.two_agents(now)
   let #(s, t) = state.create_item(s, a, support.task("Work"), now)
-  let close = fn(to) { state.Edit(None, None, None, None, Some(to)) }
+  let close = fn(to) { state.Edit(None, None, None, None, Some(to), None) }
   let assert Error(_) = state.edit_item(s, a, t.id, close(model.Resolved), now)
   let assert Ok(#(s, out)) = state.edit_item(s, a, t.id, close(model.Done), now)
   assert out.item.state == model.Done
@@ -88,7 +88,7 @@ pub fn edit_bumps_version_and_resolves_findings_test() {
       s,
       a,
       t.id,
-      state.Edit(Some("Clearer work"), None, None, None, None),
+      state.Edit(Some("Clearer work"), None, None, None, None, None),
       now,
     )
   assert out.item.version == 2
@@ -198,7 +198,7 @@ pub fn closing_an_item_resolves_overlaps_pointing_at_it_test() {
       s,
       b,
       theirs.id,
-      state.Edit(None, None, None, None, Some(model.Done)),
+      state.Edit(None, None, None, None, Some(model.Done), None),
       now,
     )
   let assert Ok(item) = dict.get(s.items, mine.id)
@@ -220,7 +220,7 @@ pub fn prune_keeps_references_valid_test() {
       s,
       a,
       mine.id,
-      state.Edit(None, None, None, None, Some(model.Done)),
+      state.Edit(None, None, None, None, Some(model.Done), None),
       now,
     )
   let policy = state.RetentionPolicy(30, 90, 14, 90)

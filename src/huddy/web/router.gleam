@@ -13,6 +13,7 @@ import huddy/mcp/transport
 import huddy/net
 import huddy/oauth/server as oauth
 import huddy/web/actions
+import huddy/web/docs
 import huddy/web/layout
 import huddy/web/login
 import huddy/web/page
@@ -39,6 +40,8 @@ pub fn handler(
         transport.handle(ctx, req, transport.Secret(secret))
       ["mcp", ..] ->
         response.new(404) |> response.set_body(mist.Bytes(bytes_tree.new()))
+      // large bodies, authenticated by the secret in the path
+      ["docs", "upload", secret] -> docs.upload(ctx, req, secret)
       _ -> web(req)
     }
   }
@@ -84,6 +87,7 @@ fn handle_web(ctx: Ctx, req: wisp.Request) -> wisp.Response {
     ["logout"], http.Post -> login.logout(ctx, req)
     ["items", id, action], http.Post -> actions.handle(ctx, req, id, action)
     ["settings", ..rest], _ -> settings.handle(ctx, req, rest)
+    ["docs", ..rest], _ -> docs.handle(ctx, req, rest)
     [".well-known", "oauth-protected-resource"], http.Get
     | [".well-known", "oauth-protected-resource", "mcp"], http.Get
     -> oauth.protected_resource(ctx)

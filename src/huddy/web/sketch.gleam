@@ -375,6 +375,8 @@ pub type Icon {
   GoalIcon
   TaskIcon
   DecisionIcon(blocking: Bool)
+  /// a page with a folded corner: a document
+  DocIcon
 }
 
 /// A 22px category icon.
@@ -457,6 +459,22 @@ pub fn icon(kind: Icon, seed_text: String) -> String {
       }
       let #(d, rng) = polygon(rng, pts, 0.6)
       #(solid <> path(d, "dec", 1.9, ""), rng)
+    }
+    DocIcon -> {
+      let #(page, rng) =
+        polygon(
+          rng,
+          [#(5.0, 3.0), #(13.5, 3.0), #(18.0, 7.5), #(18.0, 19.5), #(5.0, 19.5)],
+          0.5,
+        )
+      let #(fold, rng) =
+        polygon(rng, [#(13.5, 3.0), #(13.5, 7.5), #(18.0, 7.5)], 0.4)
+      let #(l1, rng) = line(rng, 8.0, 11.5, 15.0, 11.5, 0.4)
+      let #(l2, rng) = line(rng, 8.0, 15.5, 14.0, 15.5, 0.4)
+      #(
+        path(page <> fold, "ink", 1.6, "") <> path(l1 <> l2, "ink", 1.2, ""),
+        rng,
+      )
     }
   }
   "<svg class=\"icon\" width=\"22\" height=\"22\" viewBox=\"0 0 22 22\" aria-hidden=\"true\">"

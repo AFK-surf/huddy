@@ -1,4 +1,6 @@
 //// JSON encoding/decoding of `State` for the storage file (format 1).
+//// Fields added since format 1 was introduced (`documents`, item `docs`)
+//// are optional when decoding, so older files load unchanged.
 
 import gleam/dict
 import gleam/dynamic/decode.{type Decoder}
@@ -7,10 +9,11 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import huddy/model.{
-  type Agent, type Event, type Finding, type Item, type Judgment, type McpLink,
-  type NextIds, type OAuthClient, type OAuthGrant, type OAuthToken, type State,
-  type User, type WebSession, Agent, Event, Finding, Item, Judgment, McpLink,
-  NextIds, OAuthClient, OAuthGrant, OAuthToken, State, User, WebSession,
+  type Agent, type Document, type Event, type Finding, type Item, type Judgment,
+  type McpLink, type NextIds, type OAuthClient, type OAuthGrant, type OAuthToken,
+  type State, type User, type WebSession, Agent, DocFile, Document, Event,
+  Finding, Item, Judgment, McpLink, NextIds, OAuthClient, OAuthGrant, OAuthToken,
+  State, User, WebSession,
 }
 
 pub const format = 1
@@ -90,6 +93,13 @@ pub fn encode_state(state: State, saved_at: Int) -> Json {
         #("tokens", json.array(dict.values(state.oauth_tokens), encode_token)),
       ]),
     ),
+    #(
+      "documents",
+      json.array(
+        dict.values(state.documents) |> sort_by(fn(d) { d.id }),
+        encode_document,
+      ),
+    ),
   ])
 }
 
@@ -107,6 +117,7 @@ fn encode_next_ids(n: NextIds) -> Json {
     #("judgment", json.int(n.judgment)),
     #("link", json.int(n.link)),
     #("grant", json.int(n.grant)),
+    #("document", json.int(n.document)),
   ])
 }
 
@@ -160,10 +171,33 @@ pub fn encode_item(i: Item) -> Json {
     #("seen_at", opt(i.seen_at, json.int)),
     #("hidden_by", opt(i.hidden_by, json.int)),
     #("hidden_note", opt(i.hidden_note, json.string)),
+    #("docs", json.array(i.docs, json.int)),
     #("version", json.int(i.version)),
     #("created_at", json.int(i.created_at)),
     #("updated_at", json.int(i.updated_at)),
     #("closed_at", opt(i.closed_at, json.int)),
+  ])
+}
+
+pub fn encode_document(d: Document) -> Json {
+  json.object([
+    #("id", json.int(d.id)),
+    #("agent", json.int(d.agent)),
+    #("title", json.string(d.title)),
+    #(
+      "files",
+      json.array(d.files, fn(f) {
+        json.object([
+          #("path", json.string(f.path)),
+          #("size", json.int(f.size)),
+        ])
+      }),
+    ),
+    #("size", json.int(d.size)),
+    #("storage_key", json.string(d.storage_key)),
+    #("version", json.int(d.version)),
+    #("created_at", json.int(d.created_at)),
+    #("updated_at", json.int(d.updated_at)),
   ])
 }
 
@@ -320,6 +354,11 @@ pub fn state_decoder() -> Decoder(State) {
     use tokens <- decode.field("tokens", decode.list(token_decoder()))
     decode.success(#(clients, grants, tokens))
   })
+  use documents <- decode.optional_field(
+    "documents",
+    [],
+    decode.list(document_decoder()),
+  )
   decode.success(State(
     saved_at:,
     next_id:,
@@ -334,6 +373,7 @@ pub fn state_decoder() -> Decoder(State) {
     oauth_clients: by(clients, fn(c) { c.client_id }),
     oauth_grants: by(grants, fn(g) { g.id }),
     oauth_tokens: by(tokens, fn(t) { t.token_sha256 }),
+    documents: by(documents, fn(d) { d.id }),
   ))
 }
 
@@ -350,6 +390,7 @@ fn next_ids_decoder() -> Decoder(NextIds) {
   use judgment <- decode.field("judgment", decode.int)
   use link <- decode.field("link", decode.int)
   use grant <- decode.field("grant", decode.int)
+  use document <- decode.optional_field("document", 1, decode.int)
   decode.success(NextIds(
     user:,
     agent:,
@@ -359,6 +400,7 @@ fn next_ids_decoder() -> Decoder(NextIds) {
     judgment:,
     link:,
     grant:,
+    document:,
   ))
 }
 
@@ -435,6 +477,7 @@ pub fn item_decoder() -> Decoder(Item) {
   use seen_at <- nullable("seen_at", decode.int)
   use hidden_by <- nullable("hidden_by", decode.int)
   use hidden_note <- nullable("hidden_note", decode.string)
+  use docs <- decode.optional_field("docs", [], decode.list(decode.int))
   use version <- decode.optional_field("version", 1, decode.int)
   use created_at <- decode.field("created_at", decode.int)
   use updated_at <- decode.field("updated_at", decode.int)
@@ -456,10 +499,41 @@ pub fn item_decoder() -> Decoder(Item) {
     seen_at:,
     hidden_by:,
     hidden_note:,
+    docs:,
     version:,
     created_at:,
     updated_at:,
     closed_at:,
+  ))
+}
+
+pub fn document_decoder() -> Decoder(Document) {
+  use id <- decode.field("id", decode.int)
+  use agent <- decode.field("agent", decode.int)
+  use title <- decode.field("title", decode.string)
+  use files <- decode.field(
+    "files",
+    decode.list({
+      use path <- decode.field("path", decode.string)
+      use size <- decode.field("size", decode.int)
+      decode.success(DocFile(path:, size:))
+    }),
+  )
+  use size <- decode.field("size", decode.int)
+  use storage_key <- decode.field("storage_key", decode.string)
+  use version <- decode.field("version", decode.int)
+  use created_at <- decode.field("created_at", decode.int)
+  use updated_at <- decode.field("updated_at", decode.int)
+  decode.success(Document(
+    id:,
+    agent:,
+    title:,
+    files:,
+    size:,
+    storage_key:,
+    version:,
+    created_at:,
+    updated_at:,
   ))
 }
 
@@ -711,7 +785,18 @@ pub fn check_references(state: State) -> Result(Nil, String) {
             case opt_item("item overlaps", i.overlaps) {
               Ok(_) ->
                 case opt_user("item seen_by", i.seen_by) {
-                  Ok(_) -> opt_user("item hidden_by", i.hidden_by)
+                  Ok(_) ->
+                    case opt_user("item hidden_by", i.hidden_by) {
+                      Ok(_) ->
+                        check_all(i.docs, fn(d) {
+                          check(
+                            dict.has_key(state.documents, d),
+                            "item document",
+                            d,
+                          )
+                        })
+                      e -> e
+                    }
                   e -> e
                 }
               e -> e
@@ -744,7 +829,11 @@ pub fn check_references(state: State) -> Result(Nil, String) {
       check_all(dict.values(state.oauth_tokens), fn(t) {
         check(dict.has_key(state.oauth_grants, t.grant), "token grant", t.grant)
       })
-    [r1, r2, r3, r4, r5, r6, r7]
+    let r8 =
+      check_all(dict.values(state.documents), fn(d) {
+        check(dict.has_key(state.agents, d.agent), "document agent", d.agent)
+      })
+    [r1, r2, r3, r4, r5, r6, r7, r8]
   }
   list.try_each(result, fn(r) { r })
 }

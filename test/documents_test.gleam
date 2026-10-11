@@ -1,0 +1,253 @@
+import gleam/bit_array
+import gleam/dict
+import gleam/int
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
+import huddy/blob
+import huddy/codec
+import huddy/documents
+import huddy/model
+import huddy/persist
+import huddy/state
+import support
+
+const now = 1_791_622_800_000
+
+@external(erlang, "huddy_ffi", "zip_create")
+fn zip_create(files: List(#(String, BitArray))) -> Result(BitArray, String)
+
+fn zip(files: List(#(String, String))) -> BitArray {
+  let assert Ok(bits) =
+    zip_create(list.map(files, fn(f) { #(f.0, bit_array.from_string(f.1)) }))
+  bits
+}
+
+fn paths(files: List(#(String, BitArray))) -> List(String) {
+  list.map(files, fn(f) { f.0 })
+}
+
+// --- unpacking -------------------------------------------------------------------
+
+pub fn markdown_becomes_index_test() {
+  let assert Ok([#("index.md", bits)]) =
+    documents.unpack(documents.Markdown("# Hello\n"), 1000)
+  assert bits == <<"# Hello\n":utf8>>
+}
+
+pub fn zip_with_images_test() {
+  let upload =
+    documents.Zip(
+      zip([
+        #("index.md", "# Plan\n![arch](img/arch.png)"),
+        #("img/arch.png", "PNG"),
+        #("./notes/extra.md", "more"),
+        #("__MACOSX/._index.md", "junk"),
+        #("img/.DS_Store", "junk"),
+      ]),
+    )
+  let assert Ok(files) = documents.unpack(upload, 10_000)
+  assert paths(files) == ["img/arch.png", "index.md", "notes/extra.md"]
+}
+
+pub fn zip_of_a_folder_is_accepted_test() {
+  let upload =
+    documents.Zip(
+      zip([#("my-doc/index.md", "# Doc"), #("my-doc/img/a.png", "PNG")]),
+    )
+  let assert Ok(files) = documents.unpack(upload, 10_000)
+  assert paths(files) == ["img/a.png", "index.md"]
+}
+
+pub fn zip_without_index_is_rejected_test() {
+  let assert Error(message) =
+    documents.unpack(documents.Zip(zip([#("README.md", "# Doc")])), 10_000)
+  assert string.contains(message, "no index.md")
+}
+
+pub fn unsafe_paths_are_rejected_test() {
+  let assert Error(message) =
+    documents.unpack(
+      documents.Zip(zip([#("index.md", "x"), #("../escape.png", "x")])),
+      10_000,
+    )
+  assert string.contains(message, "Unsafe file name")
+  assert documents.normalize_path("/etc/passwd") == Error(Nil)
+  assert documents.normalize_path("a\\b.png") == Error(Nil)
+  assert documents.normalize_path("img/../../x") == Error(Nil)
+  assert documents.normalize_path("./img//a.png") == Ok("img/a.png")
+}
+
+pub fn size_limits_test() {
+  let big = string.repeat("x", 2000)
+  let assert Error(message) =
+    documents.unpack(documents.Zip(zip([#("index.md", big)])), 1000)
+  assert string.contains(message, "larger than")
+  let assert Error(_) = documents.unpack(documents.Markdown(big), 1000)
+  let many =
+    int.range(1, documents.max_files + 2, [], fn(acc, n) { [n, ..acc] })
+    |> list.map(fn(n) { #("f" <> string.inspect(n) <> ".txt", "x") })
+  let assert Error(message) =
+    documents.unpack(documents.Zip(zip([#("index.md", "x"), ..many])), 100_000)
+  assert string.contains(message, "more than")
+}
+
+pub fn garbage_is_not_a_zip_test() {
+  let assert Error(message) =
+    documents.unpack(documents.Zip(<<"PK", 3, 4, "nonsense":utf8>>), 1000)
+  assert string.contains(message, "not a valid zip")
+  assert documents.detect(<<0xff, 0xfe>>) |> option.from_result == None
+  let assert Ok(documents.Markdown("# Hi")) = documents.detect(<<"# Hi":utf8>>)
+}
+
+pub fn heading_and_labels_test() {
+  assert documents.heading("intro\n#  Design notes \n## Sub")
+    == Some("Design notes")
+  assert documents.heading("no heading") == None
+  assert documents.size_label(512) == "512 B"
+  assert documents.size_label(2048) == "2 KB"
+  assert documents.size_label(3_500_000) == "3.3 MB"
+  assert blob.content_type("img/A.PNG") == "image/png"
+  assert blob.content_type("Makefile") == "application/octet-stream"
+}
+
+// --- state -----------------------------------------------------------------------
+
+fn new_doc(title: String, replaces) -> state.NewDocument {
+  state.NewDocument(
+    title:,
+    files: [model.DocFile("index.md", 10), model.DocFile("img/a.png", 5)],
+    storage_key: "key-" <> title,
+    replaces:,
+  )
+}
+
+pub fn documents_are_versioned_by_their_uploader_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let assert Ok(#(s, doc, None)) =
+    state.put_document(s, a, new_doc("v1", None), now)
+  assert doc.version == 1
+  assert doc.size == 15
+  assert model.doc_ref(doc.id) == "doc1"
+  let assert Ok(#(s, doc2, Some("key-v1"))) =
+    state.put_document(s, a, new_doc("v2", Some(doc.id)), now + 1)
+  assert doc2.id == doc.id
+  assert doc2.version == 2
+  assert doc2.created_at == now
+  // another agent can read it but not replace it
+  let assert Error(message) =
+    state.put_document(s, b, new_doc("theirs", Some(doc.id)), now)
+  assert string.contains(message, "only that agent")
+  let assert Error(_) = state.put_document(s, a, new_doc("x", Some(99)), now)
+  assert list.map(state.documents(s), fn(d) { d.title }) == ["v2"]
+}
+
+pub fn items_link_documents_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let assert Ok(#(s, doc, _)) =
+    state.put_document(s, a, new_doc("Spec", None), now)
+  // any agent can link any document
+  let #(s, t) =
+    state.create_item(
+      s,
+      b,
+      state.NewItem(..support.task("Build it"), docs: [doc.id, doc.id]),
+      now,
+    )
+  assert t.docs == [doc.id]
+  assert state.check_docs(s, [doc.id]) == Ok(Nil)
+  let assert Error(message) = state.check_docs(s, [doc.id, 42])
+  assert string.contains(message, "doc42")
+  let assert Error(_) =
+    state.edit_item(
+      s,
+      b,
+      t.id,
+      state.Edit(None, None, None, None, None, Some([42])),
+      now,
+    )
+  // changing the links is a new version of the item
+  let assert Ok(#(s, out)) =
+    state.edit_item(
+      s,
+      b,
+      t.id,
+      state.Edit(None, None, None, None, None, Some([])),
+      now,
+    )
+  assert out.content_changed
+  assert out.item.docs == []
+  assert out.item.version == 2
+  assert state.items_with_doc(s, doc.id) == []
+}
+
+pub fn deleting_a_document_unlinks_it_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let assert Ok(#(s, doc, _)) =
+    state.put_document(s, a, new_doc("Old", None), now)
+  let #(s, t) =
+    state.create_item(
+      s,
+      a,
+      state.NewItem(..support.task("Uses it"), docs: [doc.id]),
+      now,
+    )
+  assert list.map(state.items_with_doc(s, doc.id), fn(i) { i.id }) == [t.id]
+  let assert Ok(#(s, deleted)) = state.delete_document(s, doc.id, 1, now)
+  assert deleted.storage_key == "key-Old"
+  assert state.get_document(s, doc.id) == None
+  let assert Some(item) = state.get_item(s, t.id)
+  assert item.docs == []
+  assert codec.check_references(s) == Ok(Nil)
+}
+
+pub fn documents_round_trip_through_the_state_file_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let assert Ok(#(s, doc, _)) =
+    state.put_document(s, a, new_doc("Spec", None), now)
+  let #(s, _) =
+    state.create_item(
+      s,
+      a,
+      state.NewItem(..support.goal("Ship it"), docs: [doc.id]),
+      now,
+    )
+  let assert Ok(loaded) = persist.decode_file(persist.encode(s, now), "test")
+  assert loaded.documents == s.documents
+  assert loaded.items == s.items
+  assert loaded.next_id == s.next_id
+  // a dangling link fails the integrity check
+  let broken = model.State(..s, documents: dict.new())
+  let assert Error(message) = codec.check_references(broken)
+  assert string.contains(message, "item document")
+}
+
+pub fn files_written_before_documents_existed_still_load_test() {
+  let #(s, _, _) = support.two_agents(now)
+  let text =
+    persist.encode(s, now)
+    |> bit_array.to_string
+    |> option.from_result
+    |> option.unwrap("")
+    |> string.replace(",\"documents\":[]", "")
+    |> string.replace(",\"document\":1", "")
+  assert !string.contains(text, "document")
+  let assert Ok(loaded) =
+    persist.decode_file(bit_array.from_string(text), "old")
+  assert dict.is_empty(loaded.documents)
+  assert loaded.next_id.document == 1
+}
+
+// --- storage ---------------------------------------------------------------------
+
+pub fn local_trees_test() {
+  let dir = blob.File(support.tmp_dir() <> "/documents/k1")
+  assert blob.list_tree(dir) == Ok([])
+  let assert Ok(_) = blob.write(blob.child(dir, "index.md"), <<"# x":utf8>>)
+  let assert Ok(_) = blob.write(blob.child(dir, "img/deep/a.png"), <<1, 2>>)
+  assert blob.list_tree(dir) == Ok(["img/deep/a.png", "index.md"])
+  assert blob.read(blob.child(dir, "img/deep/a.png")) == Ok(<<1, 2>>)
+  let assert Ok(_) = blob.delete_tree(dir)
+  assert blob.list_tree(dir) == Ok([])
+  assert blob.delete_tree(dir) == Ok(Nil)
+}

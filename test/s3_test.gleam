@@ -208,6 +208,8 @@ pub fn s3_storage_config_test() {
   assert s3.scheme == http.Https
   assert !s3.path_style
   assert c.storage.backup_dir == blob.Object(s3, "acme-huddy", "prod/backups")
+  assert c.storage.documents_dir
+    == blob.Object(s3, "acme-huddy", "prod/documents")
 }
 
 pub fn s3_custom_endpoint_config_test() {
@@ -449,6 +451,25 @@ pub fn persist_round_trip_through_s3_test() {
   process.send(objects, Delete("team a/huddy.json"))
   let assert Error(message) = persist.load(path, backups)
   assert string.contains(message, "missing but backups exist")
+}
+
+pub fn document_trees_in_s3_test() {
+  let port = 48_313
+  let config = fake_config(port)
+  let objects = start_fake_s3(port, config)
+  let docs = blob.Object(config, "huddy", "team a/documents")
+  let dir = blob.child(docs, "k1")
+  let other = blob.child(docs, "k10")
+  let assert Ok(_) = blob.write(blob.child(dir, "index.md"), <<"# x":utf8>>)
+  let assert Ok(_) = blob.write(blob.child(dir, "img/a b.png"), <<1, 2>>)
+  let assert Ok(_) = blob.write(blob.child(dir, "img/c.png"), <<3>>)
+  let assert Ok(_) = blob.write(blob.child(other, "index.md"), <<"# y":utf8>>)
+  // listed across pages, and "k1/" does not match "k10/"
+  assert blob.list_tree(dir) == Ok(["img/a b.png", "img/c.png", "index.md"])
+  assert blob.read(blob.child(dir, "img/a b.png")) == Ok(<<1, 2>>)
+  let assert Ok(_) = blob.delete_tree(dir)
+  assert blob.list_tree(dir) == Ok([])
+  assert process.call(objects, 1000, Keys) == ["team a/documents/k10/index.md"]
 }
 
 pub fn s3_errors_are_reported_test() {

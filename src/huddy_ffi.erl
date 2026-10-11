@@ -1,7 +1,11 @@
 -module(huddy_ffi).
 
+-include_lib("kernel/include/file.hrl").
+-include_lib("stdlib/include/zip.hrl").
+
 -export([now_ms/0, os_pid/0, getenv/1, atomic_write/2, read_file/1, delete_file/1,
-         file_exists/1, ensure_dir/1, list_dir/1,
+         file_exists/1, ensure_dir/1, list_dir/1, list_tree/1, delete_tree/1,
+         zip_extract/3, zip_create/1,
          utc_date_compact/1, amz_date/1, rfc2822_date/1, getaddrs/1, send_email/5,
          limiter_init/0, rate_take/4, halt/1, rescue/1,
          configure_proxy/0]).
@@ -68,6 +72,120 @@ ensure_dir(Dir) ->
 list_dir(Dir) ->
     case file:list_dir(Dir) of
         {ok, Names} -> {ok, [unicode:characters_to_binary(N) || N <- Names]};
+        {error, Reason} -> {error, reason_to_binary(Reason)}
+    end.
+
+%% Relative paths of the regular files below Dir (symlinks are skipped).
+list_tree(Dir) ->
+    case file:read_link_info(Dir) of
+        {error, enoent} -> {ok, []};
+        {error, Reason} -> {error, reason_to_binary(Reason)};
+        {ok, _} ->
+            try {ok, lists:sort(walk(Dir, <<>>))}
+            catch throw:{walk, Reason} -> {error, reason_to_binary(Reason)}
+            end
+    end.
+
+walk(Dir, Prefix) ->
+    Names = case file:list_dir(Dir) of
+                {ok, N} -> N;
+                {error, R} -> throw({walk, R})
+            end,
+    lists:flatmap(
+      fun(Name0) ->
+              Name = unicode:characters_to_binary(Name0),
+              Full = filename:join(Dir, Name),
+              Rel = case Prefix of <<>> -> Name; _ -> <<Prefix/binary, "/", Name/binary>> end,
+              case file:read_link_info(Full) of
+                  {ok, #file_info{type = directory}} -> walk(Full, Rel);
+                  {ok, #file_info{type = regular}} -> [Rel];
+                  _ -> []
+              end
+      end, Names).
+
+delete_tree(Dir) ->
+    case file:del_dir_r(Dir) of
+        ok -> {ok, nil};
+        {error, enoent} -> {ok, nil};
+        {error, Reason} -> {error, reason_to_binary(Reason)}
+    end.
+
+%% The files in a zip archive held in memory, as [{Name, Data}] (directory
+%% entries are left out). Refuses archives that declare more than MaxFiles
+%% files or MaxBytes in total, and inflates in a separate process whose
+%% memory is capped, so an archive that lies about its sizes cannot exhaust
+%% the node.
+zip_extract(Bin, MaxFiles, MaxBytes) ->
+    try zip:list_dir(Bin) of
+        {ok, Listing} ->
+            Files = [{Name, Size} || #zip_file{name = Name, info = #file_info{size = Size}} <- Listing,
+                                     not is_dir_entry(Name)],
+            Total = lists:sum([S || {_, S} <- Files]),
+            Unsafe = [N || #zip_file{name = N} <- Listing, unsafe_name(N)],
+            if
+                Unsafe =/= [] ->
+                    {error, <<"unsafe_name:", (unicode:characters_to_binary(hd(Unsafe)))/binary>>};
+                length(Files) > MaxFiles -> {error, <<"too_many_files">>};
+                Total > MaxBytes -> {error, <<"too_large">>};
+                true -> unzip_capped(Bin, MaxBytes)
+            end;
+        {error, _} -> {error, <<"not_a_zip">>}
+    catch _:_ -> {error, <<"not_a_zip">>}
+    end.
+
+%% Absolute paths, ".." segments and backslashes (zip would rewrite them
+%% when extracting, with a logged error; refuse them instead).
+unsafe_name([$/ | _]) -> true;
+unsafe_name(Name) ->
+    lists:member($\\, Name) orelse lists:member("..", string:split(Name, "/", all)).
+
+is_dir_entry([]) -> true;
+is_dir_entry(Name) -> lists:last(Name) =:= $/.
+
+unzip_capped(Bin, MaxBytes) ->
+    Words = (3 * MaxBytes + byte_size(Bin)) div erlang:system_info(wordsize) + 4000000,
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, Mon} = spawn_monitor(
+                   fun() ->
+                           process_flag(max_heap_size, #{size => Words, kill => true,
+                                                         error_logger => false,
+                                                         include_shared_binaries => true}),
+                           %% foldl hands over names exactly as stored (unzip
+                           %% would quietly rewrite unsafe ones); the caller
+                           %% validates them.
+                           Collect = fun(Name, _Info, GetBin, Acc) -> [{Name, GetBin()} | Acc] end,
+                           Result = try zip:foldl(Collect, [], {"upload.zip", Bin}) of
+                                        {ok, Entries} -> {ok, lists:reverse(Entries)};
+                                        {error, _} -> {error, <<"not_a_zip">>}
+                                    catch _:_ -> {error, <<"not_a_zip">>}
+                                    end,
+                           Parent ! {Ref, Result}
+                   end),
+    receive
+        {Ref, {ok, Entries}} ->
+            erlang:demonitor(Mon, [flush]),
+            Files = [{unicode:characters_to_binary(Name), Data}
+                     || {Name, Data} <- Entries, not is_dir_entry(Name)],
+            case lists:sum([byte_size(D) || {_, D} <- Files]) > MaxBytes of
+                true -> {error, <<"too_large">>};
+                false -> {ok, Files}
+            end;
+        {Ref, Error} ->
+            erlang:demonitor(Mon, [flush]),
+            Error;
+        {'DOWN', Mon, process, Pid, _} -> {error, <<"too_large">>}
+    after 30000 ->
+            exit(Pid, kill),
+            erlang:demonitor(Mon, [flush]),
+            {error, <<"too_large">>}
+    end.
+
+%% A zip archive (in memory) holding the given [{Path, Data}] files.
+zip_create(Files) ->
+    Entries = [{unicode:characters_to_list(Path), Data} || {Path, Data} <- Files],
+    case zip:zip("document.zip", Entries, [memory]) of
+        {ok, {_, Zip}} -> {ok, Zip};
         {error, Reason} -> {error, reason_to_binary(Reason)}
     end.
 

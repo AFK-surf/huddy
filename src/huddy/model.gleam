@@ -75,11 +75,39 @@ pub type Item {
     seen_at: Option(Int),
     hidden_by: Option(Int),
     hidden_note: Option(String),
+    /// documents the agent linked to this item
+    docs: List(Int),
     version: Int,
     created_at: Int,
     updated_at: Int,
     closed_at: Option(Int),
   )
+}
+
+/// A Markdown document: an `index.md`, optionally with images and other
+/// files it links to. Documents are global: every agent and every human can
+/// read every document. The files live in `storage.documents_dir` under
+/// `storage_key` (see `huddy/documents`); the state file holds the metadata.
+pub type Document {
+  Document(
+    id: Int,
+    /// the agent that uploaded it; only that agent can replace it
+    agent: Int,
+    title: String,
+    /// sorted by path; always includes "index.md"
+    files: List(DocFile),
+    /// total size of the files in bytes
+    size: Int,
+    /// the directory below `storage.documents_dir` holding this version
+    storage_key: String,
+    version: Int,
+    created_at: Int,
+    updated_at: Int,
+  )
+}
+
+pub type DocFile {
+  DocFile(path: String, size: Int)
 }
 
 pub type FindingKind {
@@ -219,6 +247,7 @@ pub type NextIds {
     judgment: Int,
     link: Int,
     grant: Int,
+    document: Int,
   )
 }
 
@@ -238,13 +267,14 @@ pub type State {
     oauth_clients: Dict(String, OAuthClient),
     oauth_grants: Dict(Int, OAuthGrant),
     oauth_tokens: Dict(String, OAuthToken),
+    documents: Dict(Int, Document),
   )
 }
 
 pub fn empty_state() -> State {
   State(
     saved_at: 0,
-    next_id: NextIds(1, 1, 1, 1, 1, 1, 1, 1),
+    next_id: NextIds(1, 1, 1, 1, 1, 1, 1, 1, 1),
     users: dict.new(),
     web_sessions: dict.new(),
     agents: dict.new(),
@@ -256,6 +286,7 @@ pub fn empty_state() -> State {
     oauth_clients: dict.new(),
     oauth_grants: dict.new(),
     oauth_tokens: dict.new(),
+    documents: dict.new(),
   )
 }
 
@@ -388,6 +419,10 @@ pub fn item_ref(id: Int) -> String {
 
 pub fn finding_ref(id: Int) -> String {
   "f" <> int.to_string(id)
+}
+
+pub fn doc_ref(id: Int) -> String {
+  "doc" <> int.to_string(id)
 }
 
 /// Parse "i41", "41", "f88" (with the given prefix) into an integer id.
