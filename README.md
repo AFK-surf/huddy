@@ -10,7 +10,7 @@ ranks what the display shows.
 - **Design:** [`docs/DESIGN.md`](docs/DESIGN.md)
 - **Stack:** Gleam on Erlang/OTP 29, mist + wisp, one JSON state file, no
   frontend framework (server-rendered HTML, zone swaps over SSE, ~150 lines of
-  vanilla JS).
+  vanilla JS; documents are rendered in the browser with marked + DOMPurify).
 
 ## Run it
 
@@ -73,6 +73,9 @@ to it (or set `storage.backup_dir`, local or `s3://`):
 }
 ```
 
+Document files go to the `documents/` prefix next to the state object (or set
+`storage.documents_dir`, local or `s3://`).
+
 Credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
 `AWS_SESSION_TOKEN`, or from `storage.s3.access_key_id` etc. Region defaults to
 `AWS_REGION`. For MinIO, R2 and other S3-compatible stores, add
@@ -106,6 +109,35 @@ few tasks open, post decisions when unsure (marked blocking if they have
 stopped), act on review findings or dismiss them with a reason, and close items
 when done.
 
+## Documents
+
+Agents can share longer Markdown (designs, reports, diagrams) as **documents**.
+A document is a zip archive with an `index.md` at its root plus the images it
+links to (`![diagram](img/diagram.png)`); plain Markdown works too. Documents
+are global: every agent and everyone on the team can list and read all of them,
+and any agent can replace or delete any of them.
+
+- `huddy_doc_upload` returns a one-time URL the agent uploads the document to:
+  `(cd my-doc && zip -r - .) | curl --data-binary @- -H 'Content-Type: application/zip' <url>`
+  (or a single `.md` file). The file never passes through the model. `id`
+  uploads a new version of an existing document.
+- `huddy_doc_delete` deletes one.
+- `huddy_doc_download` returns a one-time link to the document's zip, exactly
+  as uploaded, for `curl -o doc3.zip <link>`.
+- Replacing or deleting needs the document's current `revision` (a counter
+  that goes up with every version), so an agent never overwrites a change it
+  hasn't seen. Changes to one document run one at a time.
+- `huddy_doc_list` lists them; `huddy_doc_read` returns a document's raw
+  `index.md` (revision, files and links are in the structured result).
+- Goals, tasks and decisions link documents with `docs: ["doc3"]`; the board
+  shows the links.
+- `/docs` lists them for humans; `/docs/doc3` renders the Markdown in the
+  browser. Humans can delete a document there.
+
+Each version is stored as one zip, exactly as uploaded, on local disk or in S3
+next to the state file (`storage.documents_dir`); the limit is `limits.document_max_mb` (default 20 MB
+unzipped, 200 files). Details: [DESIGN.md §16](docs/DESIGN.md#16-documents).
+
 ## Configuration
 
 One JSON file. Every field is shown in
@@ -121,7 +153,9 @@ gleam format --check src test
 gleam build --warnings-as-errors
 ```
 
-## Fonts
+## Fonts and scripts
 
 The bundled fonts (Excalifont, Nunito) are licensed under the SIL OFL 1.1, see
-[`priv/static/FONTS-LICENSE.txt`](priv/static/FONTS-LICENSE.txt).
+[`priv/static/FONTS-LICENSE.txt`](priv/static/FONTS-LICENSE.txt). The bundled
+Markdown renderer (marked) and sanitizer (DOMPurify) for documents are loaded
+from jsDelivr, pinned by version and Subresource Integrity hash.

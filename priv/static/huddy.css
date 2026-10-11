@@ -152,3 +152,41 @@ header.mini .logo { font-family: var(--hand); font-size: 34px; text-decoration: 
 .secret pre { border: 1.5px dashed var(--dec); }
 .row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0 14px; align-items: end; }
+
+/* documents */
+.page { max-width: 860px; margin: 0 auto; padding: 24px 16px 60px; }
+.page h1 { font-family: var(--hand); font-weight: normal; font-size: 32px; margin: 0 0 8px; overflow-wrap: anywhere; }
+.page > h1 + p { margin-top: 0; }
+header.mini .links { margin-left: auto; display: flex; gap: 14px; font-family: var(--hand); font-size: 18px; }
+header.mini .links a { text-decoration: none; }
+.search input { font: 15px var(--text); padding: 6px 8px; border: 1.5px solid var(--ink); border-radius: 6px; background: var(--paper); width: 100%; max-width: 360px; margin: 6px 0 14px; }
+.doclist { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+.docrow { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; align-items: start; }
+.docrow .t { font-family: var(--hand); font-size: 21px; line-height: 1.25; overflow-wrap: anywhere; }
+.docs { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 6px; justify-content: inherit; }
+.goal .bubble .docs { justify-content: center; margin-bottom: 0; }
+.doclink { display: inline-flex; align-items: center; gap: 4px; font-family: var(--hand); font-size: 16px; color: var(--goal); text-decoration: none; overflow-wrap: anywhere; }
+.doclink:hover { text-decoration: underline; }
+.doclink svg.icon { width: 18px; height: 18px; }
+.dochead { margin-bottom: 18px; }
+.crumbs { font-size: 14px; margin-top: 4px; }
+.doc-src { white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
+.doc-body { line-height: 1.55; overflow-wrap: anywhere; }
+.doc-body h1, .doc-body h2, .doc-body h3 { font-family: var(--hand); font-weight: normal; line-height: 1.2; margin: 1.3em 0 .4em; }
+.doc-body h1 { font-size: 30px; } .doc-body h2 { font-size: 25px; } .doc-body h3 { font-size: 21px; }
+.doc-body h4, .doc-body h5, .doc-body h6 { margin: 1.2em 0 .4em; }
+.doc-body img { max-width: 100%; height: auto; }
+.doc-body pre { white-space: pre; overflow-x: auto; word-break: normal; }
+.doc-body :not(pre) > code { background: #f1f3f5; padding: 1px 4px; border-radius: 4px; }
+.doc-body blockquote { margin: 1em 0; padding: 2px 14px; border-left: 3px solid var(--grid); color: #495057; }
+.doc-body table { border-collapse: collapse; display: block; overflow-x: auto; margin: 1em 0; }
+.doc-body th, .doc-body td { border: 1px solid #dee2e6; padding: 5px 9px; text-align: left; vertical-align: top; }
+.doc-body hr { border: 0; border-top: 1.5px dashed var(--muted); margin: 2em 0; }
+.docside { margin-top: 34px; padding-top: 6px; border-top: 1.5px dashed var(--grid); }
+.docside h2 { font-family: var(--hand); font-weight: normal; font-size: 22px; margin: 16px 0 6px; }
+.docside .opts { margin-top: 16px; gap: 18px; }
+.docside a.btn { text-decoration: none; }
+/* the dark-mode canvas inversion would invert pictures too: undo it for them */
+@media (prefers-color-scheme: dark) {
+  .doc-body img { filter: invert(100%) hue-rotate(180deg); }
+}

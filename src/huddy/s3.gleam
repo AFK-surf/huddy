@@ -32,7 +32,9 @@ pub type Config {
   )
 }
 
-const timeout_ms = 10_000
+/// Long enough for document zips (up to `limits.document_max_mb`) on a slow
+/// link; the same for every request, the state file included.
+const timeout_ms = 600_000
 
 /// Fetch an object. A missing object is `Error("enoent")`, as for files; a
 /// missing bucket is an ordinary error.
@@ -41,7 +43,7 @@ pub fn get(
   bucket: String,
   key: String,
 ) -> Result(BitArray, String) {
-  use resp <- result.try(send(config, http.Get, bucket, key, [], <<>>))
+  use resp <- result.try(send(config, http.Get, bucket, key, [], <<>>, []))
   case resp.status {
     200 -> Ok(resp.body)
     404 ->
@@ -60,8 +62,13 @@ pub fn put(
   bucket: String,
   key: String,
   body: BitArray,
+  content_type: String,
 ) -> Result(Nil, String) {
-  use resp <- result.try(send(config, http.Put, bucket, key, [], body))
+  use resp <- result.try(
+    send(config, http.Put, bucket, key, [], body, [
+      #("content-type", content_type),
+    ]),
+  )
   case resp.status {
     200 -> Ok(Nil)
     _ -> Error(failure("PUT", bucket, key, resp))
@@ -74,7 +81,7 @@ pub fn delete(
   bucket: String,
   key: String,
 ) -> Result(Nil, String) {
-  use resp <- result.try(send(config, http.Delete, bucket, key, [], <<>>))
+  use resp <- result.try(send(config, http.Delete, bucket, key, [], <<>>, []))
   case resp.status {
     200 | 204 | 404 -> Ok(Nil)
     _ -> Error(failure("DELETE", bucket, key, resp))
@@ -102,7 +109,7 @@ fn list_from(
     None -> []
   }
   let query = [#("list-type", "2"), #("prefix", prefix), ..query]
-  use resp <- result.try(send(config, http.Get, bucket, "", query, <<>>))
+  use resp <- result.try(send(config, http.Get, bucket, "", query, <<>>, []))
   use body <- result.try(case resp.status, bit_array.to_string(resp.body) {
     200, Ok(body) -> Ok(body)
     _, _ -> Error(failure("LIST", bucket, prefix, resp))
@@ -126,8 +133,13 @@ fn send(
   key: String,
   query: List(#(String, String)),
   body: BitArray,
+  unsigned_headers: List(#(String, String)),
 ) -> Result(Response(BitArray), String) {
-  let req = build(config, method, bucket, key, query, body, sys.now_ms())
+  let req =
+    build(config, method, bucket, key, query, body, sys.now_ms())
+    |> list.fold(unsigned_headers, _, fn(req, h) {
+      request.set_header(req, h.0, h.1)
+    })
   httpc.configure()
   |> httpc.timeout(timeout_ms)
   |> httpc.follow_redirects(False)
@@ -143,7 +155,8 @@ fn send(
   })
 }
 
-/// A signed request. Public for tests.
+/// A signed request. Public for tests. Headers added afterwards (such as
+/// `content-type`) are not signed.
 pub fn build(
   config: Config,
   method: http.Method,
@@ -193,10 +206,6 @@ pub fn build(
     headers
     |> list.filter(fn(h) { h.0 != "host" })
     |> list.prepend(#("authorization", auth))
-  let headers = case method {
-    http.Put -> [#("content-type", "application/json"), ..headers]
-    _ -> headers
-  }
   Request(
     method:,
     headers:,

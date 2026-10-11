@@ -208,6 +208,8 @@ pub fn s3_storage_config_test() {
   assert s3.scheme == http.Https
   assert !s3.path_style
   assert c.storage.backup_dir == blob.Object(s3, "acme-huddy", "prod/backups")
+  assert c.storage.documents_dir
+    == blob.Object(s3, "acme-huddy", "prod/documents")
 }
 
 pub fn s3_custom_endpoint_config_test() {

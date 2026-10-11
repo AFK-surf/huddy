@@ -1,7 +1,8 @@
-//// Where the state file and its backups live: a local file or directory, or
-//// an object or key prefix in S3 (or an S3-compatible store). In the
-//// configuration, an `s3://bucket/key` path selects S3; anything else is a
-//// local path.
+//// Huddy's one storage abstraction. The state file, its backups and the
+//// document files all go through it, so every operation below works the same
+//// on a local file or directory and on an object or key prefix in S3 (or an
+//// S3-compatible store). In the configuration, an `s3://bucket/key` path
+//// selects S3; anything else is a local path.
 
 import gleam/list
 import gleam/result
@@ -86,11 +87,26 @@ pub fn read(location: Location) -> Result(BitArray, String) {
 }
 
 /// Replace the file or object atomically: a reader (or a restart after a
-/// crash) sees either the previous complete contents or the new ones.
+/// crash) sees either the previous complete contents or the new ones. A
+/// missing parent directory is created. S3 objects get a content type from
+/// the name's extension.
 pub fn write(location: Location, data: BitArray) -> Result(Nil, String) {
   case location {
-    File(path) -> sys.atomic_write(path, data)
-    Object(s3:, bucket:, key:) -> s3.put(s3, bucket, key, data)
+    File(path) -> {
+      use _ <- result.try(sys.ensure_dir(parent_path(path)))
+      sys.atomic_write(path, data)
+    }
+    Object(s3:, bucket:, key:) ->
+      s3.put(s3, bucket, key, data, content_type(key))
+  }
+}
+
+/// Remove what an interrupted `write` may have left behind: the `.tmp` file
+/// next to a local file. S3 writes are single requests and leave nothing.
+pub fn discard_partial(location: Location) -> Result(Nil, String) {
+  case location {
+    File(path) -> sys.delete_file(path <> ".tmp")
+    Object(..) -> Ok(Nil)
   }
 }
 
@@ -106,6 +122,30 @@ pub fn ensure_dir(dir: Location) -> Result(Nil, String) {
   case dir {
     File(path) -> sys.ensure_dir(path)
     Object(..) -> Ok(Nil)
+  }
+}
+
+/// The media type for a file name, by extension. Unknown types are
+/// `application/octet-stream`.
+pub fn content_type(name: String) -> String {
+  let ext = case list.last(string.split(string.lowercase(name), ".")) {
+    Ok(ext) if ext != name -> ext
+    _ -> ""
+  }
+  case ext {
+    "json" -> "application/json"
+    "md" | "markdown" -> "text/markdown; charset=utf-8"
+    "txt" | "log" -> "text/plain; charset=utf-8"
+    "csv" -> "text/csv; charset=utf-8"
+    "png" -> "image/png"
+    "jpg" | "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "svg" -> "image/svg+xml"
+    "avif" -> "image/avif"
+    "pdf" -> "application/pdf"
+    "zip" -> "application/zip"
+    _ -> "application/octet-stream"
   }
 }
 

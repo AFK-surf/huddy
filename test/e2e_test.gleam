@@ -18,6 +18,7 @@ import gleam/result
 import gleam/string
 import gleam/uri
 import huddy
+import huddy/blob
 import huddy/ctx.{type Ctx}
 import huddy/jev
 import huddy/persist
@@ -683,4 +684,341 @@ pub fn concurrent_writes_are_durable_test() {
     |> list.map(fn(i) { i.title })
     |> list.filter(string.starts_with(_, "Parallel task"))
   assert list.length(titles) == 20
+}
+
+// --- documents -----------------------------------------------------------------------
+
+@external(erlang, "huddy_ffi", "zip_create")
+fn zip_create(files: List(#(String, BitArray))) -> Result(BitArray, String)
+
+/// A web session for a new user, as a Cookie header value.
+fn web_session(ctx: Ctx, email: String) -> String {
+  let token = sys.random_token(32)
+  let assert Ok(_) =
+    store.update(ctx.store, fn(s, e, now) {
+      let #(s, user) = state.create_user(s, email, now)
+      let s =
+        state.create_session(s, sys.sha256_hex(token), user.id, now, 60_000, "")
+      store.Changed(s, e, [], Nil)
+    })
+  "huddy_session=" <> bit_array.base64_encode(<<token:utf8>>, False)
+}
+
+fn structured(resp: Response(String), path: List(String)) -> String {
+  let assert Ok(value) =
+    json.parse(
+      resp.body,
+      decode.at(["result", "structuredContent", ..path], decode.string),
+    )
+  value
+}
+
+fn is_error(resp: Response(String)) -> Bool {
+  let assert Ok(value) =
+    json.parse(resp.body, decode.at(["result", "isError"], decode.bool))
+  value
+}
+
+pub fn documents_flow_test() {
+  let #(ctx, _) = boot(48_305)
+  let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let bob = user_with_link(ctx, "bob@acme.dev", Some(#("claude-code", "api")))
+
+  // plain Markdown, through a one-time upload URL
+  let resp = upload_doc(alice, [], <<"# Design notes\n\nSome *text*.":utf8>>)
+  assert resp.status == 200
+  assert string.contains(
+    resp.body,
+    "Stored doc1 revision 1 \\\"Design notes\\\"",
+  )
+
+  // a zip with an image, title given explicitly
+  let png = <<0x89, "PNG":utf8, 13, 10, 26, 10, 1, 2, 3>>
+  let assert Ok(zip) =
+    zip_create([
+      #("index.md", <<"# Ignored\n![arch](img/arch.png)":utf8>>),
+      #("img/arch.png", png),
+    ])
+  let resp = upload_doc(alice, [#("title", json.string("Architecture"))], zip)
+  assert resp.status == 200
+  assert string.contains(
+    resp.body,
+    "Stored doc2 revision 1 \\\"Architecture\\\"",
+  )
+  assert string.contains(resp.body, "\"url\":\"" <> base(ctx) <> "/docs/doc2\"")
+
+  // a one-time download link serves the stored zip, without a web session
+  let download_link = fn(id) {
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_download", json.object([#("id", json.string(id))])),
+    )
+    |> structured(["download_url"])
+  }
+  let link = download_link("doc2")
+  assert string.starts_with(link, base(ctx) <> "/docs/download/")
+  let got = get_bits(link, "")
+  assert got.status == 200
+  assert got.body == zip
+  assert response.get_header(got, "content-disposition")
+    == Ok("attachment; filename=\"doc2-r1.zip\"")
+  assert get_bits(link, "").status == 404
+  // a link for revision 1 of doc1, used after doc1 changes below
+  let stale_link = download_link("doc1")
+
+  // everyone can list and read every document
+  let resp = rpc(bob, [], call("huddy_doc_list", json.object([])))
+  let text = tool_text(resp)
+  assert string.contains(text, "doc2 \"Architecture\" — alice/codex/huddy")
+  assert string.contains(text, "doc1 \"Design notes\"")
+  let resp =
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_read", json.object([#("id", json.string("doc2"))])),
+    )
+  // exactly index.md, nothing else; the rest is structured
+  assert tool_text(resp) == "# Ignored\n![arch](img/arch.png)"
+  let assert Ok(files) =
+    json.parse(
+      resp.body,
+      decode.at(
+        ["result", "structuredContent", "files"],
+        decode.list(decode.string),
+      ),
+    )
+  assert files == ["img/arch.png", "index.md"]
+  let assert Ok(1) =
+    json.parse(
+      resp.body,
+      decode.at(["result", "structuredContent", "revision"], decode.int),
+    )
+  let assert Ok([#("text", _)]) =
+    json.parse(
+      resp.body,
+      decode.at(
+        ["result", "content"],
+        decode.list({
+          use t <- decode.field("type", decode.string)
+          use text <- decode.field("text", decode.string)
+          decode.success(#(t, text))
+        }),
+      ),
+    )
+
+  // any agent can replace any document, naming the revision it read
+  let replace_doc1 = fn(revision) {
+    rpc(
+      bob,
+      [],
+      call(
+        "huddy_doc_upload",
+        json.object([
+          #("id", json.string("doc1")),
+          #("revision", json.int(revision)),
+        ]),
+      ),
+    )
+  }
+  let resp =
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_upload", json.object([#("id", json.string("doc1"))])),
+    )
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "`revision` is required")
+  assert is_error(replace_doc1(2))
+  // two upload URLs for revision 1: the first upload wins, the second is
+  // refused because doc1 changed in between
+  let first = structured(replace_doc1(1), ["result", "upload_url"])
+  let second = structured(replace_doc1(1), ["result", "upload_url"])
+  let resp = send(http.Post, first, [], "# Design notes v2")
+  assert resp.status == 200
+  assert string.contains(resp.body, "Stored doc1 revision 2")
+  let resp = send(http.Post, second, [], "# Design notes v2 (lost update)")
+  assert resp.status == 400
+  assert string.contains(resp.body, "doc1 is at revision 2, not 1")
+  let resp = rpc(alice, [], call("huddy_doc_list", json.object([])))
+  assert string.contains(
+    tool_text(resp),
+    "doc1 \"Design notes v2\" — alice/codex/huddy (revision 2 by bob/claude-code/api)",
+  )
+  assert get_bits(stale_link, "").status == 410
+  let resp =
+    rpc(
+      bob,
+      [],
+      call(
+        "huddy_doc_upload",
+        json.object([#("id", json.string("doc42")), #("revision", json.int(1))]),
+      ),
+    )
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "No document doc42")
+
+  // items link documents, and the board shows them
+  let resp =
+    rpc(
+      bob,
+      [],
+      call(
+        "huddy_post",
+        json.object([
+          #("kind", json.string("task")),
+          #("title", json.string("Implement the architecture")),
+          #("docs", json.array(["doc2"], json.string)),
+        ]),
+      ),
+    )
+  assert !is_error(resp)
+  let resp =
+    rpc(
+      bob,
+      [],
+      call(
+        "huddy_post",
+        json.object([
+          #("kind", json.string("task")),
+          #("title", json.string("Broken link")),
+          #("docs", json.array(["doc99"], json.string)),
+        ]),
+      ),
+    )
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "No document doc99")
+  let resp = rpc(alice, [], call("huddy_read", json.object([])))
+  assert string.contains(tool_text(resp), "docs: doc2 \"Architecture\"")
+
+  // a one-time upload URL
+  let resp = rpc(alice, [], call("huddy_doc_upload", json.object([])))
+  let url = structured(resp, ["result", "upload_url"])
+  assert string.starts_with(url, base(ctx) <> "/docs/upload/")
+  // no title and no heading: rejected, and the URL can be used again
+  let bad = send(http.Post, url, [], "just text")
+  assert bad.status == 400
+  assert string.contains(bad.body, "title")
+  let ok =
+    send(
+      http.Post,
+      url,
+      [#("content-type", "text/markdown")],
+      "# Uploaded with curl\n",
+    )
+  assert ok.status == 200
+  assert string.contains(ok.body, "Stored doc3 revision 1")
+  let again = send(http.Post, url, [], "# Again")
+  assert again.status == 404
+
+  // any agent can delete any document at the revision it read
+  let delete_doc3 = fn(revision) {
+    rpc(
+      bob,
+      [],
+      call(
+        "huddy_doc_delete",
+        json.object([
+          #("id", json.string("doc3")),
+          #("revision", json.int(revision)),
+        ]),
+      ),
+    )
+  }
+  let resp = delete_doc3(2)
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "doc3 is at revision 1, not 2")
+  assert string.contains(tool_text(delete_doc3(1)), "Deleted doc3")
+  assert is_error(delete_doc3(1))
+
+  // the web pages
+  let cookie = web_session(ctx, "carol@acme.dev")
+  let get = fn(path) {
+    send(http.Get, base(ctx) <> path, [#("cookie", cookie)], "")
+  }
+  let board = get("/")
+  assert string.contains(board.body, "/docs/doc2")
+  assert string.contains(board.body, "Architecture")
+  let list = get("/docs")
+  assert list.status == 200
+  assert string.contains(list.body, "Design notes")
+  let page = get("/docs/doc2")
+  assert page.status == 200
+  // the renderer comes from the CDN, pinned by hash
+  assert string.contains(
+    page.body,
+    "src=\"https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.umd.js\" defer=\"\" integrity=\"sha384-",
+  )
+  assert header(page, "content-security-policy") == ""
+  assert string.contains(page.body, "id=\"doc-src\"")
+  assert string.contains(page.body, "![arch](img/arch.png)")
+  assert string.contains(page.body, "/static/huddy-doc.js")
+  assert string.contains(page.body, "Implement the architecture")
+  let image = get_bits(base(ctx) <> "/docs/doc2/files/img/arch.png", cookie)
+  assert image.status == 200
+  assert image.body == png
+  assert response.get_header(image, "content-type") == Ok("image/png")
+  let assert Ok("sandbox" <> _) =
+    response.get_header(image, "content-security-policy")
+  assert get("/docs/doc2/files/nope.png").status == 404
+  assert get("/docs/doc2/files/../../huddy.json").status == 404
+  let download = get_bits(base(ctx) <> "/docs/doc2/download", cookie)
+  assert download.status == 200
+  assert response.get_header(download, "content-type") == Ok("application/zip")
+  // the stored zip, exactly as uploaded
+  assert download.body == zip
+  // documents need a signed-in user
+  let anonymous =
+    send(http.Get, base(ctx) <> "/docs/doc2/files/img/arch.png", [], "")
+  assert anonymous.status == 303
+
+  // a human deletes a document: it is unlinked and its files are gone
+  let deleted =
+    send(
+      http.Post,
+      base(ctx) <> "/docs/doc2/delete",
+      [
+        #("cookie", cookie),
+        #("origin", base(ctx)),
+        #("content-type", "application/x-www-form-urlencoded"),
+      ],
+      "revision=1",
+    )
+  assert deleted.status == 303
+  assert get("/docs/doc2").status == 404
+  let resp = rpc(alice, [], call("huddy_read", json.object([])))
+  assert !string.contains(tool_text(resp), "doc2")
+  process.sleep(200)
+  // one zip per version: only doc1's current one is left (its revision 1,
+  // doc2 and doc3 are gone)
+  let assert Ok([left]) = blob.list_dir(ctx.config.storage.documents_dir)
+  assert string.ends_with(left, ".zip")
+}
+
+/// Upload a document the only way agents can: ask huddy_doc_upload for a
+/// one-time URL, then POST the bytes to it.
+fn upload_doc(
+  mcp: String,
+  args: List(#(String, json.Json)),
+  body: BitArray,
+) -> Response(String) {
+  let resp = rpc(mcp, [], call("huddy_doc_upload", json.object(args)))
+  let url = structured(resp, ["result", "upload_url"])
+  let assert Ok(req) = request.to(url)
+  let req = req |> request.set_method(http.Post) |> request.set_body(body)
+  let assert Ok(resp) =
+    httpc.configure() |> httpc.timeout(5000) |> httpc.dispatch_bits(req)
+  let assert Ok(text) = bit_array.to_string(resp.body)
+  response.set_body(resp, text)
+}
+
+fn get_bits(url: String, cookie: String) -> Response(BitArray) {
+  let assert Ok(req) = request.to(url)
+  let req =
+    req
+    |> request.set_header("cookie", cookie)
+    |> request.set_body(<<>>)
+  let assert Ok(resp) =
+    httpc.configure() |> httpc.timeout(5000) |> httpc.dispatch_bits(req)
+  resp
 }

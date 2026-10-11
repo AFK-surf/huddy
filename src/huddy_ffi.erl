@@ -1,7 +1,12 @@
 -module(huddy_ffi).
 
+-include_lib("kernel/include/file.hrl").
+-include_lib("stdlib/include/zip.hrl").
+
 -export([now_ms/0, os_pid/0, getenv/1, atomic_write/2, read_file/1, delete_file/1,
          file_exists/1, ensure_dir/1, list_dir/1,
+         zip_extract/3, zip_create/1, zip_read/2,
+         zip_cache_init/0, zip_cache_get/1, zip_cache_put/3, zip_cache_delete/1,
          utc_date_compact/1, amz_date/1, rfc2822_date/1, getaddrs/1, send_email/5,
          limiter_init/0, rate_take/4, halt/1, rescue/1,
          configure_proxy/0]).
@@ -68,6 +73,143 @@ ensure_dir(Dir) ->
 list_dir(Dir) ->
     case file:list_dir(Dir) of
         {ok, Names} -> {ok, [unicode:characters_to_binary(N) || N <- Names]};
+        {error, Reason} -> {error, reason_to_binary(Reason)}
+    end.
+
+%% The files in a zip archive held in memory, as [{Name, Data}] (directory
+%% entries are left out). Refuses archives that declare more than MaxFiles
+%% files or MaxBytes in total, and inflates in a separate process whose
+%% memory is capped, so an archive that lies about its sizes cannot exhaust
+%% the node.
+zip_extract(Bin, MaxFiles, MaxBytes) ->
+    try zip:list_dir(Bin) of
+        {ok, Listing} ->
+            Files = [{Name, Size} || #zip_file{name = Name, info = #file_info{size = Size}} <- Listing,
+                                     not is_dir_entry(Name)],
+            Total = lists:sum([S || {_, S} <- Files]),
+            Unsafe = [N || #zip_file{name = N} <- Listing, unsafe_name(N)],
+            if
+                Unsafe =/= [] ->
+                    {error, <<"unsafe_name:", (unicode:characters_to_binary(hd(Unsafe)))/binary>>};
+                length(Files) > MaxFiles -> {error, <<"too_many_files">>};
+                Total > MaxBytes -> {error, <<"too_large">>};
+                true -> unzip_capped(Bin, MaxBytes)
+            end;
+        {error, _} -> {error, <<"not_a_zip">>}
+    catch _:_ -> {error, <<"not_a_zip">>}
+    end.
+
+%% Absolute paths, ".." segments and backslashes (zip would rewrite them
+%% when extracting, with a logged error; refuse them instead).
+unsafe_name([$/ | _]) -> true;
+unsafe_name(Name) ->
+    lists:member($\\, Name) orelse lists:member("..", string:split(Name, "/", all)).
+
+is_dir_entry([]) -> true;
+is_dir_entry(Name) -> lists:last(Name) =:= $/.
+
+unzip_capped(Bin, MaxBytes) ->
+    Words = (3 * MaxBytes + byte_size(Bin)) div erlang:system_info(wordsize) + 4000000,
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, Mon} = spawn_monitor(
+                   fun() ->
+                           process_flag(max_heap_size, #{size => Words, kill => true,
+                                                         error_logger => false,
+                                                         include_shared_binaries => true}),
+                           %% foldl hands over names exactly as stored (unzip
+                           %% would quietly rewrite unsafe ones); the caller
+                           %% validates them.
+                           Collect = fun(Name, _Info, GetBin, Acc) -> [{Name, GetBin()} | Acc] end,
+                           Result = try zip:foldl(Collect, [], {"upload.zip", Bin}) of
+                                        {ok, Entries} -> {ok, lists:reverse(Entries)};
+                                        {error, _} -> {error, <<"not_a_zip">>}
+                                    catch _:_ -> {error, <<"not_a_zip">>}
+                                    end,
+                           Parent ! {Ref, Result}
+                   end),
+    receive
+        {Ref, {ok, Entries}} ->
+            erlang:demonitor(Mon, [flush]),
+            Files = [{unicode:characters_to_binary(Name), Data}
+                     || {Name, Data} <- Entries, not is_dir_entry(Name)],
+            case lists:sum([byte_size(D) || {_, D} <- Files]) > MaxBytes of
+                true -> {error, <<"too_large">>};
+                false -> {ok, Files}
+            end;
+        {Ref, Error} ->
+            erlang:demonitor(Mon, [flush]),
+            Error;
+        {'DOWN', Mon, process, Pid, _} -> {error, <<"too_large">>}
+    after 30000 ->
+            exit(Pid, kill),
+            erlang:demonitor(Mon, [flush]),
+            {error, <<"too_large">>}
+    end.
+
+%% One entry of a zip archive held in memory, by its name in the archive.
+%% Archives are checked by zip_extract/3 before they are stored, so names
+%% are safe and sizes are within limits.
+zip_read(Zip, Name) ->
+    try zip:unzip(Zip, [memory, {file_list, [unicode:characters_to_list(Name)]}]) of
+        {ok, [{_, Data}]} -> {ok, Data};
+        {ok, []} -> {error, <<"enoent">>};
+        {error, Reason} -> {error, reason_to_binary(Reason)}
+    catch Class:Reason -> {error, reason_to_binary({Class, Reason})}
+    end.
+
+%% A cache of recently read document zips, so that serving the images of a
+%% page reads its zip from storage once. Keys are storage keys, which never
+%% change content. The table belongs to a process of its own, so it outlives
+%% whoever created it.
+zip_cache_init() ->
+    case ets:info(huddy_zip_cache) of
+        undefined ->
+            Parent = self(),
+            spawn(fun() ->
+                          ets:new(huddy_zip_cache, [named_table, public, set]),
+                          Parent ! huddy_zip_cache_ready,
+                          receive after infinity -> ok end
+                  end),
+            receive huddy_zip_cache_ready -> nil after 5000 -> nil end;
+        _ -> nil
+    end.
+
+zip_cache_get(Key) ->
+    try ets:lookup(huddy_zip_cache, Key) of
+        [{_, Zip, _}] ->
+            ets:update_element(huddy_zip_cache, Key, {3, erlang:monotonic_time()}),
+            {ok, Zip};
+        [] -> {error, nil}
+    catch error:badarg -> {error, nil}
+    end.
+
+%% Insert, then evict the least recently used zips until the cache holds at
+%% most MaxBytes.
+zip_cache_put(Key, Zip, MaxBytes) ->
+    try
+        ets:insert(huddy_zip_cache, {Key, Zip, erlang:monotonic_time()}),
+        Entries = lists:keysort(3, ets:tab2list(huddy_zip_cache)),
+        Total = lists:sum([byte_size(Z) || {_, Z, _} <- Entries]),
+        evict(Entries, Total, MaxBytes)
+    catch error:badarg -> ok
+    end,
+    nil.
+
+evict([{Key, Zip, _} | Rest], Total, Max) when Total > Max ->
+    ets:delete(huddy_zip_cache, Key),
+    evict(Rest, Total - byte_size(Zip), Max);
+evict(_, _, _) -> ok.
+
+zip_cache_delete(Key) ->
+    try ets:delete(huddy_zip_cache, Key) catch error:badarg -> ok end,
+    nil.
+
+%% A zip archive (in memory) holding the given [{Path, Data}] files.
+zip_create(Files) ->
+    Entries = [{unicode:characters_to_list(Path), Data} || {Path, Data} <- Files],
+    case zip:zip("document.zip", Entries, [memory]) of
+        {ok, {_, Zip}} -> {ok, Zip};
         {error, Reason} -> {error, reason_to_binary(Reason)}
     end.
 

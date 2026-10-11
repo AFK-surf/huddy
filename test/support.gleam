@@ -25,6 +25,7 @@ pub fn config(dir: String, port: Int) -> Config {
       path: blob.File(dir <> "/huddy.json"),
       backup_dir: blob.File(dir <> "/backups"),
       backup_keep: 3,
+      documents_dir: blob.File(dir <> "/documents"),
       flush_ms: 20,
       idle_flush_seconds: 1,
       warn_mb: 10,
@@ -65,6 +66,7 @@ pub fn config(dir: String, port: Int) -> Config {
       title_max_chars: 120,
       detail_max_chars: 2000,
       writes_per_agent_per_minute: 1000,
+      document_max_mb: 2,
     ),
     retention: config.Retention(30, 90, 14, 90),
   )
@@ -84,13 +86,13 @@ pub fn two_agents(now: Int) -> #(State, Int, Int) {
 }
 
 pub fn task(title: String) -> state.NewItem {
-  state.NewItem(model.Task, title, "", False, [])
+  state.NewItem(model.Task, title, "", False, [], [])
 }
 
 pub fn decision(title: String, blocking: Bool) -> state.NewItem {
-  state.NewItem(model.Decision, title, "", blocking, [])
+  state.NewItem(model.Decision, title, "", blocking, [], [])
 }
 
 pub fn goal(title: String) -> state.NewItem {
-  state.NewItem(model.Goal, title, "", False, [])
+  state.NewItem(model.Goal, title, "", False, [], [])
 }

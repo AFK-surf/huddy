@@ -12,6 +12,7 @@
     "path": "/var/lib/huddy/huddy.json",
     "backup_dir": "/var/lib/huddy/backups",
     "backup_keep": 7,
+    "documents_dir": "/var/lib/huddy/documents",
     "flush_ms": 100,
     "idle_flush_seconds": 5,
     "warn_mb": 10
@@ -89,7 +90,8 @@
   "limits": {
     "title_max_chars": 120,
     "detail_max_chars": 2000,
-    "writes_per_agent_per_minute": 12
+    "writes_per_agent_per_minute": 12,
+    "document_max_mb": 20
   },
 
   "retention": {

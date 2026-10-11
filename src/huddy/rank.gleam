@@ -44,6 +44,8 @@ pub type ItemView {
     overlap: Option(#(Int, String, String)),
     seen_by: Option(String),
     hidden_by: Option(String),
+    /// linked documents: id and title
+    docs: List(#(Int, String)),
   )
 }
 
@@ -302,6 +304,12 @@ fn item_view(s: State, item: Item, priority: Float, away: Bool) -> ItemView {
     },
     seen_by: option.map(item.seen_by, state.handle_of(s, _)),
     hidden_by: option.map(item.hidden_by, state.handle_of(s, _)),
+    docs: list.filter_map(item.docs, fn(id) {
+      case state.get_document(s, id) {
+        Some(d) -> Ok(#(d.id, d.title))
+        None -> Error(Nil)
+      }
+    }),
   )
 }
 

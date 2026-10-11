@@ -11,10 +11,6 @@ pub fn respond(status: Int, document: String) -> Response {
   |> wisp.set_header("cache-control", "no-store")
   |> wisp.set_header("x-frame-options", "DENY")
   |> wisp.set_header("referrer-policy", "same-origin")
-  |> wisp.set_header(
-    "content-security-policy",
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'",
-  )
 }
 
 /// A small centred card, used for login, settings and consent.

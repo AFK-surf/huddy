@@ -2,6 +2,7 @@
 
 import gleam/option.{type Option}
 import huddy/config.{type Config}
+import huddy/doc_lock
 import huddy/jev
 import huddy/model
 import huddy/store.{type Store}
@@ -10,6 +11,8 @@ pub type Ctx {
   Ctx(
     config: Config,
     store: Store,
+    /// serializes changes to each document
+    doc_locks: doc_lock.Locks,
     /// None when the decision model is disabled.
     ask: Option(jev.Ask),
     /// Changes on every boot; clients reload when it differs.
