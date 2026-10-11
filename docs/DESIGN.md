@@ -121,10 +121,13 @@ Literal values work too.
   "server": { "listen": "0.0.0.0", "port": 8080, "trusted_proxies": ["10.0.0.0/8"] },
   "storage": {
     "path": "/var/lib/huddy/huddy.json",       // the single state file; <path>.tmp lives next to it
-    "backup_dir": "/var/lib/huddy/backups", "backup_keep": 7,
+                                               // or "s3://bucket/key" (§5.7)
+    "backup_dir": "/var/lib/huddy/backups", "backup_keep": 7,  // default: <dir of path>/backups
     "flush_ms": 100,                           // group-commit window
     "idle_flush_seconds": 5,                   // max delay for best-effort updates
     "warn_mb": 10
+    // "s3": { "region": "eu-west-1", "endpoint": "…", "path_style": false,
+    //         "access_key_id": …, "secret_access_key": …, "session_token": … }  (§5.7)
   },
   "secret_key": { "$env": "HUDDY_SECRET_KEY" },  // ≥32 bytes; HMAC for codes/cookies
 
@@ -313,7 +316,7 @@ the two items). The others stay between Huddy and the agent.
 ## 5. Storage (one JSON file)
 
 All durable state lives in **one JSON file** (`storage.path`, e.g.
-`/var/lib/huddy/huddy.json`). At team scale (a few dozen agents, hundreds of
+`/var/lib/huddy/huddy.json`, or an S3 object, see 5.7). At team scale (a few dozen agents, hundreds of
 open items) the whole state fits comfortably in memory. Huddy keeps it there,
 reads only from memory, and rewrites the file atomically after changes. This
 drops the SQLite NIF and its C toolchain entirely.
@@ -486,6 +489,39 @@ Uniqueness rules (email, handle, `owner/name/project`, token hashes) are
 enforced by `store` with linear scans over the in-memory maps (there are tens
 of users and agents and hundreds of open items, so no indexes are needed). Referential integrity is checked at decode time: a dangling reference
 fails the boot, which is the same rule as an undecodable file.
+
+### 5.7 State in S3
+
+`storage.path` and `storage.backup_dir` can each be `s3://bucket/key` instead
+of a local path, so Huddy can run without a persistent volume. The file format,
+group commit and backups are the same; only the bytes go elsewhere
+(`huddy/blob.gleam` picks the backend, `huddy/s3.gleam` is the client).
+
+- **Atomic writes.** Each flush is one `PUT` of the whole snapshot. S3 replaces
+  an object atomically and has strong read-after-write consistency, so a
+  reader or a restart sees the previous snapshot or the new one, never a mix.
+  There is no `.tmp` object. The request is signed with SigV4 over the real
+  payload hash, so S3 rejects a body corrupted in transit.
+- **Backups** go to `<backup_dir>/huddy-YYYYMMDD.json` (by default the
+  `backups/` prefix next to the state object) and are listed with
+  `ListObjectsV2` for pruning and for the boot checks in 5.2. A state object
+  that is missing while backups exist still refuses to start; a listing that
+  fails then is an error too, not an empty start.
+- **Settings** (`storage.s3`, all optional): `region` (default `AWS_REGION`,
+  then `AWS_DEFAULT_REGION`, then `us-east-1`); `endpoint` for S3-compatible
+  stores such as MinIO or R2 (default `https://s3.<region>.amazonaws.com`);
+  `path_style` (default true with a custom endpoint, else virtual-hosted
+  `bucket.host`); `access_key_id`, `secret_access_key`, `session_token`
+  (default `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`).
+  Credentials are static: instance roles and the ECS/EKS credential endpoints
+  are not supported. The IAM policy needs `s3:GetObject`, `s3:PutObject`,
+  `s3:DeleteObject` and `s3:ListBucket` on the bucket and prefix.
+- **Latency.** A flush waits for the `PUT` (10 s timeout), so durable writes
+  take one S3 round trip instead of an fsync. Failures follow the same retry
+  and "storage error" banner path as disk errors. Requests go through
+  `HTTPS_PROXY` like other outbound calls.
+- **Single instance** still applies: two instances on the same object would
+  overwrite each other's snapshots.
 
 ---
 
@@ -989,6 +1025,8 @@ src/
   huddy/model.gleam           User, Agent, Item, Finding, OAuth records, State …
   huddy/codec.gleam           State ⇄ JSON (format 1), referential-integrity check
   huddy/persist.gleam         load (upgrades, integrity), atomic write, backups
+  huddy/blob.gleam            storage locations: local file or S3 object
+  huddy/s3.gleam              minimal S3 client (get/put/delete/list, SigV4)
   huddy/state.gleam           pure mutations on State (items, findings, OAuth, retention)
   huddy/ephemeral.gleam       in-memory-only data (login codes, OAuth codes, MCP sessions)
   huddy/store.gleam           store actor: read / update (durable) / update_lazy, group commit, pubsub
@@ -1009,7 +1047,7 @@ src/
   huddy/mcp/transport.gleam   Streamable HTTP, dual-era handling, header validation, auth
   huddy/mcp/tools.gleam       tools, board text, inbox piggybacking
 test/
-  config_test  persist_test  state_test  rank_test  review_test  web_test
+  config_test  persist_test  s3_test  state_test  rank_test  review_test  web_test
   e2e_test     (boots the app: login, MCP legacy + modern, OAuth, concurrent durable writes)
 ```
 
@@ -1020,10 +1058,10 @@ use a fake model and record e-mails.
 
 Deployment uses a two-stage Docker image. The build stage runs
 `gleam export erlang-shipment` with Gleam on OTP 29; the runtime stage is
-`erlang:29-slim`. It needs one volume, for the state file and backups. The
-volume must be a local POSIX filesystem: the atomic rename assumes it, and
-network filesystems don't reliably provide it. Run exactly one instance per
-state file; Huddy does not detect a second one.
+`erlang:29-slim`. It needs one volume, for the state file and backups, unless
+both live in S3 (5.7). The volume must be a local POSIX filesystem: the atomic
+rename assumes it, and network filesystems don't reliably provide it. Run
+exactly one instance per state file; Huddy does not detect a second one.
 TLS terminates at a reverse proxy, and `trusted_proxies` makes client IPs
 correct for rate limits.
 
@@ -1061,7 +1099,7 @@ Secret URLs ship before OAuth so that agents can start using Huddy in M1.
 | Email | Login codes only, via SMTP (`gen_smtp`); `log` transport for development. |
 | Secrets | `{"$env": "NAME"}` allowed for any string in the config; literals also work. |
 | Handles | Derived from the email local part (numeric suffix on collision), changeable in settings. |
-| Storage | One JSON file: state in memory, single writer, group commit, tmp + fsync + rename; ephemeral data in memory only. |
+| Storage | One JSON file: state in memory, single writer, group commit, tmp + fsync + rename; ephemeral data in memory only. Optionally an S3 object (one atomic PUT per flush). |
 | Retention | Closed items 30 days; events 90 days; full Jev requests 14 days, compact judgments 90 days. |
 | MCP | Dual-era (2026-07-28 stateless + 2025-11-25), JSON responses only; CIMD preferred, DCR kept for current clients. |
 

@@ -1,9 +1,12 @@
 //// The single JSON state file: loading (with format upgrades and integrity
-//// checks), atomic writes, and daily backups.
+//// checks), atomic writes, and daily backups. The file and the backups live
+//// on local disk or in S3 (see `huddy/blob`).
 ////
-//// Atomicity: every write goes to `<path>.tmp` in the same directory, is
-//// fsynced, then renamed over `<path>` (see `huddy_ffi:atomic_write/2`). The
-//// file on disk is therefore always one complete snapshot.
+//// Atomicity: on disk, every write goes to `<path>.tmp` in the same
+//// directory, is fsynced, then renamed over `<path>` (see
+//// `huddy_ffi:atomic_write/2`). In S3, every write is a single PUT, which
+//// replaces the object atomically. Either way the stored file is always one
+//// complete snapshot.
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
@@ -11,9 +14,11 @@ import gleam/dynamic/decode
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/result
 import gleam/string
+import huddy/blob.{type Location}
 import huddy/codec
 import huddy/model.{type State}
 import huddy/sys
@@ -26,29 +31,40 @@ pub fn tmp_path(path: String) -> String {
 /// deleted unread. A missing file starts an empty state, unless backups exist
 /// (then the file was lost, and silently starting empty would drop data).
 /// An undecodable file is an error naming the newest backup.
-pub fn load(path: String, backup_dir: String) -> Result(State, String) {
-  let _ = sys.delete_file(tmp_path(path))
-  case sys.read_file(path) {
+pub fn load(path: Location, backup_dir: Location) -> Result(State, String) {
+  let name = blob.to_string(path)
+  let _ = case path {
+    blob.File(file) -> sys.delete_file(tmp_path(file))
+    blob.Object(..) -> Ok(Nil)
+  }
+  case blob.read(path) {
     Error("enoent") ->
       case newest_backup(backup_dir) {
-        Ok(backup) ->
+        Ok(Some(backup)) ->
           Error(
             "state file "
-            <> path
+            <> name
             <> " is missing but backups exist; restore one (newest: "
             <> backup
             <> ") or move the backups away to start empty",
           )
-        Error(_) -> Ok(model.empty_state())
+        Ok(None) -> Ok(model.empty_state())
+        Error(reason) ->
+          Error(
+            "state file "
+            <> name
+            <> " is missing and the backups cannot be listed: "
+            <> reason,
+          )
       }
-    Error(reason) -> Error("cannot read " <> path <> ": " <> reason)
+    Error(reason) -> Error("cannot read " <> name <> ": " <> reason)
     Ok(bits) ->
-      decode_file(bits, path)
+      decode_file(bits, name)
       |> result.map_error(fn(reason) {
         reason
         <> case newest_backup(backup_dir) {
-          Ok(backup) -> "\nnewest backup: " <> backup
-          Error(_) -> ""
+          Ok(Some(backup)) -> "\nnewest backup: " <> backup
+          _ -> ""
         }
       })
   }
@@ -124,45 +140,49 @@ pub fn encode(state: State, now: Int) -> BitArray {
   |> bit_array.from_string
 }
 
-/// Write a complete snapshot atomically.
-pub fn write(path: String, state: State, now: Int) -> Result(Nil, String) {
+/// Write a complete snapshot atomically; returns its size in bytes.
+pub fn write(path: Location, state: State, now: Int) -> Result(Int, String) {
   use bits <- result.try(sys.rescue(fn() { encode(state, now) }))
-  sys.atomic_write(path, bits)
+  use _ <- result.try(blob.write(path, bits))
+  Ok(bit_array.byte_size(bits))
 }
 
 /// Write today's backup (same atomic procedure) and prune old ones.
 pub fn backup(
-  backup_dir: String,
+  backup_dir: Location,
   keep: Int,
   state: State,
   now: Int,
 ) -> Result(String, String) {
-  use _ <- result.try(sys.ensure_dir(backup_dir))
-  let file = backup_dir <> "/huddy-" <> sys.utc_date_compact(now) <> ".json"
+  use _ <- result.try(blob.ensure_dir(backup_dir))
+  let file =
+    blob.child(backup_dir, "huddy-" <> sys.utc_date_compact(now) <> ".json")
   use _ <- result.try(write(file, state, now))
   let _ = prune_backups(backup_dir, keep)
-  Ok(file)
+  Ok(blob.to_string(file))
 }
 
-fn backups(backup_dir: String) -> List(String) {
-  sys.list_dir(backup_dir)
-  |> result.unwrap([])
+fn backups(backup_dir: Location) -> Result(List(String), String) {
+  use names <- result.map(blob.list_dir(backup_dir))
+  names
   |> list.filter(fn(name) {
     string.starts_with(name, "huddy-") && string.ends_with(name, ".json")
   })
   |> list.sort(string.compare)
 }
 
-pub fn newest_backup(backup_dir: String) -> Result(String, Nil) {
-  backups(backup_dir)
-  |> list.last
-  |> result.map(fn(name) { backup_dir <> "/" <> name })
+pub fn newest_backup(backup_dir: Location) -> Result(Option(String), String) {
+  use names <- result.map(backups(backup_dir))
+  case list.last(names) {
+    Ok(name) -> Some(blob.to_string(blob.child(backup_dir, name)))
+    Error(_) -> None
+  }
 }
 
-fn prune_backups(backup_dir: String, keep: Int) -> Nil {
-  let all = backups(backup_dir)
+fn prune_backups(backup_dir: Location, keep: Int) -> Nil {
+  let all = backups(backup_dir) |> result.unwrap([])
   let excess = list.length(all) - int.max(keep, 1)
   all
   |> list.take(int.max(excess, 0))
-  |> list.each(fn(name) { sys.delete_file(backup_dir <> "/" <> name) })
+  |> list.each(fn(name) { blob.delete(blob.child(backup_dir, name)) })
 }

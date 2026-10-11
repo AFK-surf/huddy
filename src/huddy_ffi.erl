@@ -1,9 +1,9 @@
 -module(huddy_ffi).
 
 -export([now_ms/0, os_pid/0, getenv/1, atomic_write/2, read_file/1, delete_file/1,
-         file_exists/1, ensure_dir/1, list_dir/1, 
-         utc_date_compact/1, rfc2822_date/1, getaddrs/1, send_email/5,
-         limiter_init/0, rate_take/4, file_size/1, halt/1, rescue/1,
+         file_exists/1, ensure_dir/1, list_dir/1,
+         utc_date_compact/1, amz_date/1, rfc2822_date/1, getaddrs/1, send_email/5,
+         limiter_init/0, rate_take/4, halt/1, rescue/1,
          configure_proxy/0]).
 
 now_ms() -> erlang:system_time(millisecond).
@@ -59,12 +59,6 @@ delete_file(Path) ->
 
 file_exists(Path) -> filelib:is_regular(Path).
 
-file_size(Path) ->
-    case file:read_file_info(Path) of
-        {ok, Info} -> element(2, Info);
-        _ -> 0
-    end.
-
 ensure_dir(Dir) ->
     case filelib:ensure_path(Dir) of
         ok -> {ok, nil};
@@ -80,6 +74,11 @@ list_dir(Dir) ->
 utc_date_compact(Ms) ->
     {{Y, M, D}, _} = calendar:system_time_to_universal_time(Ms, millisecond),
     list_to_binary(io_lib:format("~4..0B~2..0B~2..0B", [Y, M, D])).
+
+%% ISO 8601 basic format, as AWS Signature Version 4 wants: 20130524T000000Z.
+amz_date(Ms) ->
+    {{Y, Mo, D}, {H, Mi, S}} = calendar:system_time_to_universal_time(Ms, millisecond),
+    list_to_binary(io_lib:format("~4..0B~2..0B~2..0BT~2..0B~2..0B~2..0BZ", [Y, Mo, D, H, Mi, S])).
 
 rfc2822_date(Ms) ->
     {{Y, Mo, D}, {H, Mi, S}} = calendar:system_time_to_universal_time(Ms, millisecond),

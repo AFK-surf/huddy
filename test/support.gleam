@@ -1,5 +1,6 @@
 //// Test fixtures.
 
+import huddy/blob
 import huddy/config.{type Config}
 import huddy/model.{type State}
 import huddy/state
@@ -21,8 +22,8 @@ pub fn config(dir: String, port: Int) -> Config {
     port:,
     trusted_proxies: [],
     storage: config.Storage(
-      path: dir <> "/huddy.json",
-      backup_dir: dir <> "/backups",
+      path: blob.File(dir <> "/huddy.json"),
+      backup_dir: blob.File(dir <> "/backups"),
       backup_keep: 3,
       flush_ms: 20,
       idle_flush_seconds: 1,

@@ -6,13 +6,12 @@ import argv
 import gleam/erlang/process
 import gleam/int
 import gleam/io
-import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 import gleam/result
-import gleam/string
+import huddy/blob
 import huddy/config.{type Config}
 import huddy/ctx.{type Ctx, Ctx}
 import huddy/janitor
@@ -84,7 +83,7 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
     Error(_) -> Nil
   }
   let storage = cfg.storage
-  use _ <- result.try(sys.ensure_dir(parent(storage.path)))
+  use _ <- result.try(blob.ensure_dir(blob.parent(storage.path)))
   // Load once up front so a bad file fails startup with a clear message.
   use _ <- result.try(persist.load(storage.path, storage.backup_dir))
   let store_name = process.new_name("huddy_store")
@@ -130,7 +129,7 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(
     supervision.worker(fn() {
-      // (Re)load from disk on every (re)start of the store.
+      // (Re)load from storage on every (re)start of the store.
       case persist.load(storage.path, storage.backup_dir) {
         Ok(state) -> store.start(cfg, state, store_name)
         Error(e) -> Error(actor.InitFailed(e))
@@ -148,11 +147,4 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
       actor.InitExited(_) -> "startup failed (is the port in use?)"
     }
   })
-}
-
-fn parent(path: String) -> String {
-  case list.reverse(string.split(path, "/")) {
-    [_, ..rest] if rest != [] -> string.join(list.reverse(rest), "/")
-    _ -> "."
-  }
 }

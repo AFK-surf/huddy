@@ -24,9 +24,6 @@ pub fn delete_file(path: String) -> Result(Nil, String)
 @external(erlang, "huddy_ffi", "file_exists")
 pub fn file_exists(path: String) -> Bool
 
-@external(erlang, "huddy_ffi", "file_size")
-pub fn file_size(path: String) -> Int
-
 @external(erlang, "huddy_ffi", "ensure_dir")
 pub fn ensure_dir(dir: String) -> Result(Nil, String)
 
@@ -35,6 +32,9 @@ pub fn list_dir(dir: String) -> Result(List(String), String)
 
 @external(erlang, "huddy_ffi", "utc_date_compact")
 pub fn utc_date_compact(ms: Int) -> String
+
+@external(erlang, "huddy_ffi", "amz_date")
+pub fn amz_date(ms: Int) -> String
 
 @external(erlang, "huddy_ffi", "getaddrs")
 pub fn getaddrs(host: String) -> Result(List(List(Int)), Nil)

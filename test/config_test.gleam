@@ -1,5 +1,6 @@
 import gleam/bit_array
 import gleam/string
+import huddy/blob
 import huddy/config
 import support
 
@@ -21,7 +22,7 @@ pub fn minimal_config_gets_defaults_test() {
   let assert Ok(c) = parse(minimal)
   assert c.base_url == "https://huddy.acme.dev"
   assert c.port == 8080
-  assert c.storage.backup_dir == "/var/lib/huddy/backups"
+  assert c.storage.backup_dir == blob.File("/var/lib/huddy/backups")
   assert c.storage.flush_ms == 100
   assert c.auth.allowed_domains == ["acme.dev"]
   assert c.email.transport == config.LogTransport
