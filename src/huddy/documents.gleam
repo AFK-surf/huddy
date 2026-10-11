@@ -285,6 +285,20 @@ pub fn discard(ctx: Ctx, storage_key: String) -> Nil {
   Nil
 }
 
+/// A stored upload. `durable` is False when the state file could not be
+/// written yet: the document is in memory and is saved when the write is
+/// retried, so it must not be uploaded again.
+pub type Stored {
+  Stored(doc: Document, durable: Bool)
+}
+
+pub type UploadError {
+  /// Nothing was stored; the upload can be fixed and retried.
+  NotStored(String)
+  /// The outcome is unknown; check the document before retrying.
+  Unknown(String)
+}
+
 /// How long an operation waits for earlier changes to the same document.
 const lock_timeout_ms = 120_000
 
@@ -299,18 +313,26 @@ pub fn upload(
   upload: Upload,
   title: Option(String),
   replaces: Option(DocRevision),
-) -> Result(Document, String) {
-  use unpacked <- result.try(unpack(upload, max_bytes(ctx)))
+) -> Result(Stored, UploadError) {
+  use unpacked <- result.try(
+    unpack(upload, max_bytes(ctx)) |> result.map_error(NotStored),
+  )
   case replaces {
     None -> store_version(ctx, agent_id, unpacked, title, None)
     Some(at) ->
       doc_lock.run(ctx.doc_locks, at.id, lock_timeout_ms, fn() {
         // refuse a stale revision before writing any files; put_document
         // checks again when recording the change
-        use _ <- result.try(
-          store.read(ctx.store, fn(s, _) { state.check_revision(s, at) }),
-        )
-        store_version(ctx, agent_id, unpacked, title, Some(at))
+        case store.read(ctx.store, fn(s, _) { state.check_revision(s, at) }) {
+          Error(reason) -> Error(NotStored(reason))
+          Ok(_) -> store_version(ctx, agent_id, unpacked, title, Some(at))
+        }
+      })
+      |> result.map_error(fn(failure) {
+        case failure {
+          doc_lock.NotStarted -> NotStored(doc_lock.describe(failure))
+          _ -> Unknown(doc_lock.describe(failure))
+        }
       })
       |> result.flatten
   }
@@ -322,7 +344,7 @@ fn store_version(
   unpacked: Unpacked,
   title: Option(String),
   replaces: Option(DocRevision),
-) -> Result(Document, String) {
+) -> Result(Stored, UploadError) {
   let limit = ctx.config.limits.title_max_chars
   let index =
     list.find(unpacked.files, fn(f) { f.path == "index.md" })
@@ -346,17 +368,17 @@ fn store_version(
     |> option.or(previous_title)
   use title <- result.try(case title {
     None ->
-      Error(
+      Error(NotStored(
         "Give the document a `title`, or start index.md with a \"# \" heading.",
-      )
+      ))
     Some(t) ->
       case string.length(t) > limit {
         True ->
-          Error(
+          Error(NotStored(
             "The title is longer than "
             <> int.to_string(limit)
             <> " characters.",
-          )
+          ))
         False -> Ok(t)
       }
   })
@@ -364,7 +386,7 @@ fn store_version(
   use _ <- result.try(
     blob.write(location(ctx, key), unpacked.zip)
     |> result.map_error(fn(reason) {
-      "Could not store the document: " <> reason
+      NotStored("Could not store the document: " <> reason)
     }),
   )
   let doc_files =
@@ -372,7 +394,7 @@ fn store_version(
       DocFile(path: f.path, size: bit_array.byte_size(f.data), entry: f.entry)
     })
   let stored =
-    store.update(ctx.store, fn(s, e, now) {
+    store.update_or_pending(ctx.store, fn(s, e, now) {
       case
         state.put_document(
           s,
@@ -391,21 +413,21 @@ fn store_version(
         Error(reason) -> store.NoChange(Error(reason))
       }
     })
-    |> result.flatten
   case stored {
-    Ok(#(doc, old_key)) -> {
+    Ok(#(Ok(#(doc, old_key)), True)) -> {
       option.map(old_key, discard(ctx, _))
-      Ok(doc)
+      Ok(Stored(doc, durable: True))
     }
-    Error(reason) -> {
-      // a storage error keeps the change in memory (it is retried), so the
-      // zip must stay; anything else never referenced it
-      case string.starts_with(reason, "storage") {
-        True -> Nil
-        False -> discard(ctx, key)
-      }
-      Error(reason)
+    // The change is in memory and will be saved when the write is retried.
+    // Keep both zips: until then the state file on disk still names the old
+    // one.
+    Ok(#(Ok(#(doc, _)), False)) -> Ok(Stored(doc, durable: False))
+    Ok(#(Error(reason), _)) -> {
+      discard(ctx, key)
+      Error(NotStored(reason))
     }
+    // the store did not answer: the change may or may not have been applied
+    Error(reason) -> Error(Unknown(reason))
   }
 }
 
@@ -418,20 +440,27 @@ pub fn delete(
   actor: String,
 ) -> Result(Document, String) {
   doc_lock.run(ctx.doc_locks, at.id, lock_timeout_ms, fn() {
-    let deleted =
-      store.update(ctx.store, fn(s, e, now) {
+    case
+      store.update_or_pending(ctx.store, fn(s, e, now) {
         case state.delete_document(s, at, actor, now) {
           Ok(#(s, doc)) -> store.Changed(s, e, [store.Publish], Ok(doc))
           Error(reason) -> store.NoChange(Error(reason))
         }
       })
-      |> result.flatten
-    case deleted {
-      Ok(doc) -> discard(ctx, doc.storage_key)
-      Error(_) -> Nil
+    {
+      Ok(#(Ok(doc), durable)) -> {
+        // until a failed write is retried, the state file on disk still
+        // names the zip: keep it then
+        case durable {
+          True -> discard(ctx, doc.storage_key)
+          False -> Nil
+        }
+        Ok(doc)
+      }
+      Ok(#(Error(reason), _)) | Error(reason) -> Error(reason)
     }
-    deleted
   })
+  |> result.map_error(doc_lock.describe)
   |> result.flatten
 }
 

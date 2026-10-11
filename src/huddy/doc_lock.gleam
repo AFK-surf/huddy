@@ -59,20 +59,69 @@ pub fn start(name: process.Name(Msg)) -> actor.StartResult(Locks) {
   |> actor.start
 }
 
+/// Why `run` returned no result.
+pub type Failure {
+  /// Earlier changes to the document took longer than the caller would
+  /// wait, so the work never started: nothing happened.
+  NotStarted
+  /// The work crashed part-way.
+  Crashed(String)
+  /// The work started but did not finish in time; it may still complete.
+  Unfinished
+}
+
+/// How long a job that is about to start waits for its caller to confirm
+/// it still wants the result.
+const confirm_ms = 1000
+
+/// How long the caller waits for work that has started.
+const work_timeout_ms = 600_000
+
 /// Run `work` on document `doc`'s actor, after every operation on that
-/// document sent before it, and wait up to `timeout_ms` for its result.
+/// document sent before it. The caller waits up to `timeout_ms` for the work
+/// to start; when it is about to, caller and job shake hands, so work whose
+/// caller has given up is skipped instead of applied behind its back.
 pub fn run(
   locks: Locks,
   doc: Int,
   timeout_ms: Int,
   work: fn() -> a,
-) -> Result(a, String) {
-  let reply = process.new_subject()
-  process.send(locks, Run(doc, fn() { process.send(reply, sys.rescue(work)) }))
-  case process.receive(reply, timeout_ms) {
-    Ok(Ok(value)) -> Ok(value)
-    Ok(Error(crash)) -> Error("the operation failed: " <> crash)
-    Error(_) -> Error("timed out waiting for other changes to the document")
+) -> Result(a, Failure) {
+  let starting = process.new_subject()
+  process.send(
+    locks,
+    Run(doc, fn() {
+      let go = process.new_subject()
+      process.send(starting, go)
+      case process.receive(go, confirm_ms) {
+        Ok(reply) -> process.send(reply, sys.rescue(work))
+        // the caller timed out: skip the work
+        Error(_) -> Nil
+      }
+    }),
+  )
+  case process.receive(starting, timeout_ms) {
+    Error(_) -> Error(NotStarted)
+    Ok(go) -> {
+      let reply = process.new_subject()
+      process.send(go, reply)
+      case process.receive(reply, work_timeout_ms) {
+        Ok(Ok(value)) -> Ok(value)
+        Ok(Error(crash)) -> Error(Crashed(crash))
+        Error(_) -> Error(Unfinished)
+      }
+    }
+  }
+}
+
+/// A sentence for a failure, for tool results and pages.
+pub fn describe(failure: Failure) -> String {
+  case failure {
+    NotStarted ->
+      "Other changes to the document took too long; nothing was changed. Try again."
+    Crashed(crash) -> "The change failed: " <> crash
+    Unfinished ->
+      "The change is taking unusually long and may still complete; check the document before retrying."
   }
 }
 

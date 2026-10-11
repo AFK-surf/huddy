@@ -170,6 +170,35 @@ pub fn update(
   send_update(store, change, True)
 }
 
+/// Like `update`, but the value comes back even if the write failed:
+/// `Ok(#(value, True))` once the change is on disk, `Ok(#(value, False))` if
+/// the write failed for now (the change is in memory and retried, so it
+/// will become durable unless the node stops first). `Error` only if the
+/// store did not answer in time, when the outcome is unknown.
+pub fn update_or_pending(
+  store: Store,
+  change: fn(State, Ephemeral, Int) -> Change(a),
+) -> Result(#(a, Bool), String) {
+  let reply = process.new_subject()
+  let run = fn(s, e, now) {
+    case change(s, e, now) {
+      Changed(state:, eph:, effects:, value:) ->
+        Applied(Some(state), Some(eph), effects, fn(r) {
+          process.send(reply, #(value, result.is_ok(r)))
+        })
+      EphemeralChanged(eph:, value:) ->
+        Applied(None, Some(eph), [], fn(_) {
+          process.send(reply, #(value, True))
+        })
+      NoChange(value:) ->
+        Applied(None, None, [], fn(_) { process.send(reply, #(value, True)) })
+    }
+  }
+  process.send(store, Update(run, True))
+  process.receive(reply, call_timeout)
+  |> result.replace_error("storage: timed out waiting for the write")
+}
+
 /// Apply a best-effort change and reply immediately.
 pub fn update_lazy(
   store: Store,

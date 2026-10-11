@@ -32,7 +32,9 @@ pub type Config {
   )
 }
 
-const timeout_ms = 10_000
+/// Long enough for document zips (up to `limits.document_max_mb`) on a slow
+/// link; the same for every request, the state file included.
+const timeout_ms = 600_000
 
 /// Fetch an object. A missing object is `Error("enoent")`, as for files; a
 /// missing bucket is an ordinary error.

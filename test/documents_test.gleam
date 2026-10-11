@@ -7,11 +7,13 @@ import gleam/option.{None, Some}
 import gleam/string
 import huddy/blob
 import huddy/codec
+import huddy/config
 import huddy/doc_lock
 import huddy/documents
 import huddy/model
 import huddy/persist
 import huddy/state
+import huddy/store
 import support
 
 const now = 1_791_622_800_000
@@ -312,4 +314,42 @@ pub fn changes_to_a_document_are_serialized_test() {
   // a crash is an error for its caller, not for the next operation
   let assert Error(_) = doc_lock.run(locks, 7, 1000, fn() { panic as "boom" })
   assert doc_lock.run(locks, 7, 1000, fn() { 42 }) == Ok(42)
+}
+
+pub fn work_whose_caller_gave_up_never_runs_test() {
+  let assert Ok(started) = doc_lock.start(process.new_name("test_doc_locks_2"))
+  let locks = started.data
+  let log = process.new_subject()
+  // keep document 1 busy for a while
+  process.spawn(fn() {
+    doc_lock.run(locks, 1, 5000, fn() { process.sleep(300) })
+  })
+  process.sleep(20)
+  // this caller gives up before its turn comes
+  assert doc_lock.run(locks, 1, 50, fn() { process.send(log, "ran") })
+    == Error(doc_lock.NotStarted)
+  // its turn comes and goes without the work
+  process.sleep(1500)
+  assert process.receive(log, 0) == Error(Nil)
+  assert doc_lock.run(locks, 1, 1000, fn() { "next" }) == Ok("next")
+}
+
+pub fn a_failed_write_keeps_the_value_test() {
+  let cfg = support.config(support.tmp_dir(), 1)
+  let cfg =
+    config.Config(
+      ..cfg,
+      storage: config.Storage(
+        ..cfg.storage,
+        path: blob.File("/proc/huddy-test/huddy.json"),
+      ),
+    )
+  let assert Ok(started) =
+    store.start(cfg, model.empty_state(), process.new_name("test_store"))
+  let s = started.data
+  // the change is in memory and retried; the caller still learns the value
+  assert store.update_or_pending(s, fn(st, e, _) { store.Changed(st, e, [], 7) })
+    == Ok(#(7, False))
+  assert store.update_or_pending(s, fn(_, _, _) { store.NoChange(8) })
+    == Ok(#(8, True))
 }

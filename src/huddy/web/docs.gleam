@@ -705,6 +705,7 @@ pub fn upload(
                 True -> {
                   let result =
                     documents.detect(req.body)
+                    |> result.map_error(documents.NotStored)
                     |> result.try(documents.upload(
                       ctx,
                       u.agent,
@@ -713,14 +714,29 @@ pub fn upload(
                       u.replaces,
                     ))
                   case result {
-                    Ok(doc) -> {
+                    Ok(documents.Stored(doc, durable: True)) -> {
                       let r = tools.uploaded(ctx, doc)
                       reply(200, [
                         #("message", json.string(r.text)),
                         #("document", r.structured),
                       ])
                     }
-                    Error(reason) -> {
+                    // In memory, saved when the state write is retried: the
+                    // URL stays used up, or a retry would store it twice.
+                    Ok(documents.Stored(doc, durable: False)) -> {
+                      let r = tools.uploaded(ctx, doc)
+                      reply(202, [
+                        #(
+                          "message",
+                          json.string(
+                            r.text
+                            <> " Huddy could not save its state just now; the document is kept in memory and saved when storage recovers. Do not upload it again.",
+                          ),
+                        ),
+                        #("document", r.structured),
+                      ])
+                    }
+                    Error(documents.NotStored(reason)) -> {
                       // give the URL back so the agent can fix and retry
                       store.update_lazy(ctx.store, fn(_, e, _) {
                         store.EphemeralChanged(
@@ -735,6 +751,16 @@ pub fn upload(
                         #("error", json.string("Not stored: " <> reason)),
                       ])
                     }
+                    Error(documents.Unknown(reason)) ->
+                      reply(503, [
+                        #(
+                          "error",
+                          json.string(
+                            reason
+                            <> " Check huddy_doc_list before uploading again; this URL is used up.",
+                          ),
+                        ),
+                      ])
                   }
                 }
               }

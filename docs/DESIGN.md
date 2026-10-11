@@ -535,8 +535,10 @@ client.
   Credentials are static: instance roles and the ECS/EKS credential endpoints
   are not supported. The IAM policy needs `s3:GetObject`, `s3:PutObject`,
   `s3:DeleteObject` and `s3:ListBucket` on the bucket and prefix.
-- **Latency.** A flush waits for the `PUT` (10 s timeout), so durable writes
-  take one S3 round trip instead of an fsync. Failures follow the same retry
+- **Latency.** A flush waits for the `PUT`, so durable writes take one S3
+  round trip instead of an fsync. Every S3 request has a 10-minute timeout,
+  long enough for document zips on a slow link; while a request hangs, durable
+  callers get the store's own 15 s timeout error and the change is retried. Failures follow the same retry
   and "storage error" banner path as disk errors. Requests go through
   `HTTPS_PROXY` like other outbound calls.
 - **Single instance** still applies: two instances on the same object would
@@ -1266,10 +1268,15 @@ An upload writes the zip under a fresh random `storage_key`, then records the
 document in one durable store update (which allocates the id, or bumps the
 version). Only after that is on disk is the previous version's zip deleted;
 a deletion likewise removes the zip once it is durable. If the update fails
-(the document changed or was deleted meanwhile), the new zip is deleted; if
-the write to disk fails, it stays, since the change is retried from memory. A
-crash between the two steps can leave an unreferenced zip behind, never a
-document without its zip. Backups (§5.5) cover the metadata only; back up
+(the document changed or was deleted meanwhile), the new zip is deleted. If
+only the state write fails, the change is already in memory and is retried,
+so it will become durable: the upload is reported as accepted (HTTP 202,
+with its document id), the upload URL stays used up so a retry cannot store
+it twice, and both zips are kept, since until the retry succeeds the state
+file on disk still names the old one (a deletion likewise keeps its zip
+then). If the store does not answer at all, the outcome is unknown and the
+agent is told to check before uploading again. A crash between the steps
+can leave an unreferenced zip behind, never a document without its zip. Backups (§5.5) cover the metadata only; back up
 `documents_dir` (or enable S3 versioning) to keep the zips.
 
 Older state files load unchanged: `documents`, `next_id.document` and items'
@@ -1365,4 +1372,12 @@ documents run in parallel. Document actors are linked to the registry, so if
 it restarts they go with it and there is never more than one actor per
 document. The store's single-writer update checks the revision once more when
 recording the change.
+
+A caller waits a bounded time (2 minutes) for its turn. So that work never
+happens behind the back of a caller that has given up, the document's actor
+and the caller shake hands when the work is about to start: the actor asks,
+and runs the work only if the caller confirms within a second. A caller that
+timed out never confirms, so its work is skipped and it is told nothing
+changed (an upload URL is then given back). Work that has started is waited
+for up to 10 minutes; past that the caller is told the outcome is unknown.
 
