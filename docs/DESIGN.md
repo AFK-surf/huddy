@@ -358,9 +358,12 @@ the previous complete snapshot or the new complete snapshot, never a mix:
 
 Guards around the procedure:
 - **Single instance.** At boot Huddy creates `<path>.lock` with
-  `[write, exclusive]` and writes its OS pid into it. If the lock already exists
-  and `/proc/<pid>` is alive, Huddy refuses to start. If the pid is dead, the
-  lock is stale and gets replaced. Two writers can never race on the file.
+  `[write, exclusive]` and writes its identity into it: OS pid, process start
+  time and boot id (from `/proc`). If the lock already exists and that exact
+  process is still running (same boot, same start time for the pid), Huddy
+  refuses to start. Otherwise the lock is stale and gets replaced, including
+  when the pid was reused after a reboot or container restart. Two writers can
+  never race on the file.
 - **Boot.** A leftover `<path>.tmp` is deleted unread, since it is by definition
   an unfinished write. A missing `<path>` with no backups starts an empty state.
   A `<path>` that fails to decode makes Huddy **refuse to start**, naming the

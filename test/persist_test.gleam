@@ -172,6 +172,34 @@ pub fn stale_lock_is_replaced_test() {
   assert !sys.file_exists(persist.lock_path(path))
 }
 
+@external(erlang, "huddy_ffi", "lock_identity")
+fn lock_identity(pid: String) -> String
+
+pub fn lock_held_by_live_process_is_exclusive_test() {
+  let dir = support.tmp_dir()
+  let path = dir <> "/huddy.json"
+  // pid 1 with its real start time and the current boot id: still running
+  support.write_file(
+    persist.lock_path(path),
+    bit_array.from_string(lock_identity("1")),
+  )
+  let assert Error(message) = persist.acquire_lock(path)
+  assert string.contains(message, "pid 1")
+}
+
+pub fn lock_with_reused_pid_is_replaced_test() {
+  let dir = support.tmp_dir()
+  let path = dir <> "/huddy.json"
+  // pid 1 exists, but it is not the process that wrote the lock (different
+  // start time and boot), as after a reboot or container restart
+  support.write_file(
+    persist.lock_path(path),
+    bit_array.from_string("1 0 00000000-0000-0000-0000-000000000000"),
+  )
+  let assert Ok(_) = persist.acquire_lock(path)
+  persist.release_lock(path)
+}
+
 pub fn backups_are_pruned_test() {
   let dir = support.tmp_dir()
   let backups = dir <> "/backups"
