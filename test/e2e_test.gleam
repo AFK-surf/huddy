@@ -195,6 +195,13 @@ pub fn login_flow_test() {
   let board = send(http.Get, base(ctx) <> "/", [#("cookie", cookie)], "")
   assert board.status == 200
   assert string.contains(board.body, "Needs a human")
+  // away agents are hidden by default; the toggle shows them
+  assert string.contains(board.body, "data-events=\"/events\"")
+  assert string.contains(board.body, "href=\"/?away=show\"")
+  let everyone =
+    send(http.Get, base(ctx) <> "/?away=show", [#("cookie", cookie)], "")
+  assert everyone.status == 200
+  assert string.contains(everyone.body, "data-events=\"/events?away=show\"")
   // the code is single use
   let again =
     send(

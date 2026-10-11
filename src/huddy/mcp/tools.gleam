@@ -1457,6 +1457,8 @@ fn read(
       project: non_empty(arg_string(args, "project")),
       name: non_empty(arg_string(args, "agent")),
       expand: None,
+      // "display" is what humans see by default
+      hide_away: scope != "all",
     )
   let include_closed = option.unwrap(arg_bool(args, "include_closed"), False)
   let #(text, structured) =

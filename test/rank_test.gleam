@@ -1,6 +1,8 @@
+import gleam/int
 import gleam/list
 import gleam/option.{Some}
 import gleam/set
+import gleam/string
 import huddy/config
 import huddy/model
 import huddy/rank
@@ -117,4 +119,35 @@ pub fn unseen_count_counts_own_decisions_test() {
   assert rank.unseen_decisions_for(s, 1) == 1
   let assert Ok(s) = state.mark_seen(s, d.id, 2, now)
   assert rank.unseen_decisions_for(s, 1) == 0
+}
+
+pub fn hide_away_drops_away_agents_but_keeps_their_blockers_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let then = now - state.hours(3)
+  let #(s, _) = state.create_item(s, a, support.goal("Away goal"), then)
+  let #(s, _) = state.create_item(s, a, support.task("Away task"), then)
+  let #(s, _) =
+    state.create_item(s, a, support.decision("Away question", False), then)
+  let #(s, _) =
+    state.create_item(s, a, support.decision("Away blocker", True), then)
+  let #(s, _) = state.create_item(s, b, support.task("Active task"), now)
+  let view = fn(hide_away) {
+    let filters = rank.Filters(..rank.no_filters(), hide_away:)
+    rank.compute(s, display(5, 5), 0.7, filters, rank.no_visible(), now).0
+  }
+  let agent_ids = fn(v: rank.View) { list.map(v.agents, fn(a) { a.agent.id }) }
+
+  let all = view(False)
+  assert agent_ids(all) |> list.sort(int.compare) == [a, b]
+  assert titles(all.tasks) |> list.sort(string.compare)
+    == ["Active task", "Away task"]
+  assert titles(all.decisions) == ["Away question"]
+  assert list.length(all.goals) == 1
+
+  let active = view(True)
+  assert agent_ids(active) == [b]
+  assert titles(active.tasks) == ["Active task"]
+  assert active.decisions == []
+  assert active.goals == []
+  assert titles(active.blocking) == ["Away blocker"]
 }

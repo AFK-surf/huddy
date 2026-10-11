@@ -204,7 +204,8 @@ Literal values work too.
     "document_max_mb": 20                        // a document's files, unzipped (§16)
   },
 
-  "retention": { "closed_items_days": 30, "events_days": 90, "judgment_detail_days": 14, "judgments_days": 90 }
+  "retention": { "closed_items_days": 30, "events_days": 90, "judgment_detail_days": 14, "judgments_days": 90,
+                 "inactive_agent_days": 3 }            // 0: never close an inactive agent's items (§6.3)
 }
 ```
 
@@ -404,6 +405,8 @@ Rewriting the whole file per mutation would be wasteful, so writes are batched:
 The design target is **< 5 MB**. Huddy logs a warning above `storage.warn_mb`
 (default 10). Retention keeps it there. The janitor prunes daily, as a normal
 mutation:
+- open items of an agent not seen for `inactive_agent_days` (default 3): closed
+  as given up (§6.3), so they then age out like any closed item;
 - closed items and their findings: after 30 days;
 - events: after 90 days (each is compact, ~200 bytes);
 - judgments: full Jev request/response kept for **14 days** (enough to
@@ -664,14 +667,21 @@ update is older than `sweep_idle_hours`, the janitor sends one request. The
 state is the agent's open items plus its last 10 events (including closed
 items), with one `stale_iNN` choice per open item. The sweep also retries
 unreviewed items and runs the deterministic checks:
-- an agent not seen for `agent_away_after_minutes` is rendered "away" (greyed
-  out); this is a display state, not a finding;
+- an agent not seen for `agent_away_after_minutes` is "away": greyed out, and
+  left off the default board (§8); this is a display state, not a finding;
 - an open item untouched for `untouched_days` gets an `untouched` finding;
 - open counts above the guideline get a `too_many_open` finding.
 
-**Huddy never closes an item.** Stale items fade and their owner is told; the
-agent (or a human, by hiding) makes the call. Closed and abandoned items age out
-through retention.
+**Huddy closes items only when their agent is gone.** While an agent is around,
+stale items fade and their owner is told; the agent (or a human, by hiding)
+makes the call. Once an agent hasn't been seen for
+`retention.inactive_agent_days` (default 3; 0 turns this off), nobody is left
+to make it, so the daily janitor closes that agent's open items as given up:
+goals `abandoned`, tasks `dropped`, decisions `withdrawn`. The `item_closed`
+event names the janitor and the reason. From there they age out through
+retention like any closed item, so an abandoned agent's items are gone about
+`inactive_agent_days` + `closed_items_days` after it was last seen. An agent
+that comes back finds them closed and posts again.
 
 ### 6.4 Calibration
 - Every Jev call is in `judgments`, and every finding links to the call that
@@ -839,10 +849,16 @@ goal.priority      = max priority of the agent's open items, + 0.2 if active in 
    goal) render as **one circle with several agent chips**.
 6. Items hidden by a human are left out. The footer links to `?expand=hidden`,
    which lists them with an un-hide button.
+7. **Away agents are left out by default**, with their goals, tasks and
+   non-blocking decisions. Their blocking decisions stay (rule 1): an agent
+   waiting on a human makes no calls, so it goes away while it waits. The
+   agents bar has a "show away agents" / "hide away agents" toggle
+   (`?away=show`). `huddy_read` with `scope=display` matches the default board;
+   `scope=all` includes away agents.
 
 Each zone ends with "+7 more". Clicking it expands the zone to the full list
 using `?expand=tasks`, which the server renders. Filters (`?owner=alice`,
-`?project=huddy`) work the same way, so every view is a URL.
+`?project=huddy`, `?away=show`) work the same way, so every view is a URL.
 
 ---
 
@@ -872,7 +888,7 @@ covers the per-agent view.
 
 ```
 ┌─ (2) Huddy · Acme Platform ───────────────────────── 7 agents · 2 blocked · you: alice ─┐
-│ agents: (alice/codex/huddy ●) (bob/claude-code/api ●) (carol/codex/web ○ away) …         │
+│ agents: (alice/codex/huddy ●) (bob/claude-code/api ●) (carol/codex/web ●) show away…     │
 │                                                                                           │
 │ ◆ NEEDS A HUMAN                                                                           │
 │  ┌◆ BLOCKED──────────────────────┐ ┌◆ BLOCKED · yours───────┐ ┌◇──────────────────────────┐│
@@ -1147,14 +1163,15 @@ Secret URLs ship before OAuth so that agents can start using Huddy in M1.
 | Review | Gating and hygiene are **one review** that only produces findings. The agent decides what to do and can dismiss with a reason. Huddy never rejects, edits or closes on content grounds. |
 | Refusals | Only malformed input (as tool errors), auth, and rate limits. |
 | Concurrent sessions | Same `owner/name/project` share one slot; pass a different `agent` name to separate them. |
-| Stale items | Fade and notify; never auto-close. |
+| Stale items | Fade and notify; never auto-close while the agent is active. An agent unseen for `inactive_agent_days` (default 3) has its open items closed as given up, which retention then deletes. (Revised: originally items were never auto-closed, which left a dead agent's items open forever.) |
 | Layout | Category zones; per-agent view via filters. |
+| Away agents | Left off the board by default (except their blockers); one click shows them. |
 | Icons | Circle (goal), triangle (task), diamond (decision; filled when blocking). |
 | Email | Login codes only, via SMTP (`gen_smtp`); `log` transport for development. |
 | Secrets | `{"$env": "NAME"}` allowed for any string in the config; literals also work. |
 | Handles | Derived from the email local part (numeric suffix on collision), changeable in settings. |
 | Storage | One JSON file: state in memory, single writer, group commit, tmp + fsync + rename; ephemeral data in memory only. Optionally an S3 object (one atomic PUT per flush). |
-| Retention | Closed items 30 days; events 90 days; full Jev requests 14 days, compact judgments 90 days. |
+| Retention | Inactive agents' open items closed after 3 days; closed items 30 days; events 90 days; full Jev requests 14 days, compact judgments 90 days. |
 | MCP | Dual-era (2026-07-28 stateless + 2025-11-25), JSON responses only; CIMD preferred, DCR kept for current clients. |
 | Documents | Global (not namespaced): any agent reads, replaces or deletes any document. Zip with `index.md` or plain Markdown, uploaded only through a one-time URL (never inline in MCP); files stored through the same storage abstraction as the state; Markdown rendered in the browser; items link them by id. |
 

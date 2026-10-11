@@ -19,11 +19,14 @@ pub type Filters {
     project: Option(String),
     name: Option(String),
     expand: Option(String),
+    /// leave out away agents and their items (but not their blockers)
+    hide_away: Bool,
   )
 }
 
+/// The default board: everyone, minus away agents.
 pub fn no_filters() -> Filters {
-  Filters(None, None, None, None)
+  Filters(None, None, None, None, True)
 }
 
 pub fn is_default(filters: Filters) -> Bool {
@@ -110,9 +113,15 @@ pub fn compute(
       Error(_) -> True
     }
   }
+  // An agent waiting on a human goes away, so its blockers stay.
+  let shown = fn(i: Item) {
+    !filters.hide_away
+    || !away(i.agent)
+    || { i.kind == model.Decision && i.blocking }
+  }
   let open =
     state.open_items(s)
-    |> list.filter(fn(i) { set.contains(agent_ids, i.agent) })
+    |> list.filter(fn(i) { set.contains(agent_ids, i.agent) && shown(i) })
   let view_of = fn(i: Item) {
     item_view(
       s,
@@ -194,8 +203,11 @@ pub fn compute(
   let agent_views =
     agents
     |> list.filter(fn(a) {
-      list.any(open, fn(i) { i.agent == a.id })
-      || now - a.last_seen_at < 86_400_000
+      { !filters.hide_away || !away(a.id) }
+      && {
+        list.any(open, fn(i) { i.agent == a.id })
+        || now - a.last_seen_at < 86_400_000
+      }
     })
     |> list.map(fn(a) {
       let handle = state.handle_of(s, a.owner)
