@@ -175,7 +175,7 @@ fn list_page(ctx: Ctx, req: wisp.Request, _user: User) -> wisp.Response {
                       ref
                       <> " · "
                       <> label
-                      <> " · v"
+                      <> " · revision "
                       <> int.to_string(d.version)
                       <> " · updated "
                       <> fmt.ago(now, d.updated_at)
@@ -262,7 +262,7 @@ fn show(
                     ref
                     <> " · uploaded by "
                     <> label
-                    <> " · v"
+                    <> " · revision "
                     <> int.to_string(doc.version)
                     <> " · updated "
                     <> fmt.ago(now, doc.updated_at)
@@ -342,20 +342,26 @@ fn show(
                 ]),
                 html.el("details", [html.class("hide")], [
                   html.el("summary", [], [html.text("delete")]),
-                  html.post_form("/docs/" <> ref <> "/delete", [], [], [
-                    html.el("span", [html.class("muted")], [
-                      html.text(
-                        "Deletes every version for everyone and unlinks it from items. ",
+                  html.post_form(
+                    "/docs/" <> ref <> "/delete",
+                    [],
+                    // the revision shown: a newer one is not deleted unseen
+                    [#("revision", int.to_string(doc.version))],
+                    [
+                      html.el("span", [html.class("muted")], [
+                        html.text(
+                          "Deletes every version for everyone and unlinks it from items. ",
+                        ),
+                      ]),
+                      html.el(
+                        "button",
+                        [html.class("linkish"), #("type", "submit")],
+                        [
+                          html.text("delete " <> ref),
+                        ],
                       ),
-                    ]),
-                    html.el(
-                      "button",
-                      [html.class("linkish"), #("type", "submit")],
-                      [
-                        html.text("delete " <> ref),
-                      ],
-                    ),
-                  ]),
+                    ],
+                  ),
                 ]),
               ]),
             ]),
@@ -488,9 +494,20 @@ fn delete(
     False, _ -> wisp.bad_request("cross-origin request")
     _, Error(_) -> wisp.not_found()
     True, Ok(id) -> {
-      case documents.delete(ctx, id, state.user_actor(user.id)) {
-        Ok(_) -> wisp.redirect("/docs?deleted=1")
-        Error(reason) -> wisp.bad_request(reason)
+      use form <- wisp.require_form(req)
+      case int.parse(session.form_value(form, "revision")) {
+        Error(_) -> wisp.bad_request("missing revision")
+        Ok(revision) ->
+          case
+            documents.delete(
+              ctx,
+              model.DocRevision(id:, revision:),
+              state.user_actor(user.id),
+            )
+          {
+            Ok(_) -> wisp.redirect("/docs?deleted=1")
+            Error(reason) -> wisp.bad_request(reason)
+          }
       }
     }
   }

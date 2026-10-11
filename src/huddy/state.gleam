@@ -10,10 +10,11 @@ import gleam/order
 import gleam/result
 import gleam/string
 import huddy/model.{
-  type Agent, type DocFile, type Document, type Finding, type FindingKind,
-  type Item, type ItemState, type Kind, type McpLink, type OAuthGrant,
-  type OAuthToken, type State, type User, Agent, Document, Event, Finding, Item,
-  Judgment, McpLink, OAuthGrant, OAuthToken, State, User, WebSession,
+  type Agent, type DocFile, type DocRevision, type Document, type Finding,
+  type FindingKind, type Item, type ItemState, type Kind, type McpLink,
+  type OAuthGrant, type OAuthToken, type State, type User, Agent, Document,
+  Event, Finding, Item, Judgment, McpLink, OAuthGrant, OAuthToken, State, User,
+  WebSession,
 }
 
 const day_ms = 86_400_000
@@ -600,11 +601,36 @@ pub fn doc_byline(state: State, doc: Document) -> String {
   <> case doc.updated_by == doc.agent {
     True -> ""
     False ->
-      " (v"
+      " (revision "
       <> int.to_string(doc.version)
       <> " by "
       <> agent_label(state, doc.updated_by)
       <> ")"
+  }
+}
+
+/// The document, if it exists and is still at the given revision.
+pub fn check_revision(
+  state: State,
+  at: DocRevision,
+) -> Result(Document, String) {
+  let ref = model.doc_ref(at.id)
+  case get_document(state, at.id) {
+    None -> Error("No document " <> ref <> ".")
+    Some(doc) if doc.version == at.revision -> Ok(doc)
+    Some(doc) ->
+      Error(
+        ref
+        <> " is at revision "
+        <> int.to_string(doc.version)
+        <> ", not "
+        <> int.to_string(at.revision)
+        <> ": it changed since you read it ("
+        <> doc_byline(state, doc)
+        <> "). Read it again, then retry with revision "
+        <> int.to_string(doc.version)
+        <> ".",
+      )
   }
 }
 
@@ -633,9 +659,9 @@ pub type NewDocument {
     title: String,
     files: List(DocFile),
     storage_key: String,
-    /// replace this document (it must be the agent's own) instead of
-    /// creating one
-    replaces: Option(Int),
+    /// replace this document, which must still be at this revision, instead
+    /// of creating one
+    replaces: Option(DocRevision),
   )
 }
 
@@ -675,11 +701,9 @@ pub fn put_document(
         |> add_event(now, actor, None, "doc_uploaded", doc_event(doc))
       Ok(#(state, doc, None))
     }
-    Some(id) -> {
-      use old <- result.try(
-        get_document(state, id)
-        |> option.to_result("No document " <> model.doc_ref(id) <> "."),
-      )
+    Some(at) -> {
+      let id = at.id
+      use old <- result.try(check_revision(state, at))
       let doc =
         Document(
           ..old,
@@ -712,14 +736,12 @@ fn doc_event(doc: Document) -> String {
 /// the link. `actor` is `agent_actor(…)` or `user_actor(…)`.
 pub fn delete_document(
   state: State,
-  id: Int,
+  at: DocRevision,
   actor: String,
   now: Int,
 ) -> Result(#(State, Document), String) {
-  use doc <- result.try(
-    get_document(state, id)
-    |> option.to_result("No document " <> model.doc_ref(id) <> "."),
-  )
+  let id = at.id
+  use doc <- result.try(check_revision(state, at))
   let items =
     dict.map_values(state.items, fn(_, i) {
       case list.contains(i.docs, id) {

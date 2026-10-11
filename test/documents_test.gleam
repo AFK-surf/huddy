@@ -1,11 +1,13 @@
 import gleam/bit_array
 import gleam/dict
+import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import huddy/blob
 import huddy/codec
+import huddy/doc_lock
 import huddy/documents
 import huddy/model
 import huddy/persist
@@ -113,6 +115,10 @@ pub fn heading_and_labels_test() {
 
 // --- state -----------------------------------------------------------------------
 
+fn at(id: Int, revision: Int) -> model.DocRevision {
+  model.DocRevision(id:, revision:)
+}
+
 fn new_doc(title: String, replaces) -> state.NewDocument {
   state.NewDocument(
     title:,
@@ -130,19 +136,25 @@ pub fn any_agent_can_version_a_document_test() {
   assert doc.size == 15
   assert model.doc_ref(doc.id) == "doc1"
   let assert Ok(#(s, doc2, Some("key-v1"))) =
-    state.put_document(s, a, new_doc("v2", Some(doc.id)), now + 1)
+    state.put_document(s, a, new_doc("v2", Some(at(doc.id, 1))), now + 1)
   assert doc2.id == doc.id
   assert doc2.version == 2
   assert doc2.created_at == now
   // documents are shared: another agent can replace it too
   let assert Ok(#(s, doc3, Some("key-v2"))) =
-    state.put_document(s, b, new_doc("theirs", Some(doc.id)), now + 2)
+    state.put_document(s, b, new_doc("theirs", Some(at(doc.id, 2))), now + 2)
   assert doc3.version == 3
   assert doc3.agent == a
   assert doc3.updated_by == b
   assert state.doc_byline(s, doc3)
-    == "alice/codex/huddy (v3 by bob/claude-code/api)"
-  let assert Error(_) = state.put_document(s, a, new_doc("x", Some(99)), now)
+    == "alice/codex/huddy (revision 3 by bob/claude-code/api)"
+  // a change based on an older revision is refused
+  let assert Error(message) =
+    state.put_document(s, a, new_doc("stale", Some(at(doc.id, 2))), now)
+  assert string.contains(message, "doc1 is at revision 3, not 2")
+  let assert Error(_) = state.delete_document(s, at(doc.id, 1), "agent:1", now)
+  let assert Error(_) =
+    state.put_document(s, a, new_doc("x", Some(at(99, 1))), now)
   assert list.map(state.documents(s), fn(d) { d.title }) == ["theirs"]
 }
 
@@ -198,7 +210,7 @@ pub fn deleting_a_document_unlinks_it_test() {
     )
   assert list.map(state.items_with_doc(s, doc.id), fn(i) { i.id }) == [t.id]
   let assert Ok(#(s, deleted)) =
-    state.delete_document(s, doc.id, state.agent_actor(a), now)
+    state.delete_document(s, at(doc.id, 1), state.agent_actor(a), now)
   assert deleted.storage_key == "key-Old"
   assert state.get_document(s, doc.id) == None
   let assert Some(item) = state.get_item(s, t.id)
@@ -255,4 +267,50 @@ pub fn local_trees_test() {
   let assert Ok(_) = blob.delete_tree(dir)
   assert blob.list_tree(dir) == Ok([])
   assert blob.delete_tree(dir) == Ok(Nil)
+}
+
+// --- one actor per document -----------------------------------------------------
+
+pub fn changes_to_a_document_are_serialized_test() {
+  let assert Ok(started) = doc_lock.start(process.new_name("test_doc_locks"))
+  let locks = started.data
+  let log = process.new_subject()
+  let done = process.new_subject()
+  let job = fn(doc: Int, n: Int) {
+    process.spawn(fn() {
+      let result =
+        doc_lock.run(locks, doc, 5000, fn() {
+          process.send(log, #(doc, "start", n))
+          process.sleep(20)
+          process.send(log, #(doc, "end", n))
+          n
+        })
+      process.send(done, result)
+    })
+  }
+  list.each([1, 2, 3, 4, 5], job(7, _))
+  list.each([1, 2, 3, 4, 5], fn(_) {
+    let assert Ok(Ok(_)) = process.receive(done, 5000)
+  })
+  let events =
+    list.map([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], fn(_) {
+      let assert Ok(e) = process.receive(log, 1000)
+      e
+    })
+  // never two at once: every start is followed by its own end
+  assert list.sized_chunk(events, 2)
+    |> list.all(fn(pair) {
+      case pair {
+        [#(_, "start", a), #(_, "end", b)] -> a == b
+        _ -> False
+      }
+    })
+  // different documents do not wait for each other
+  job(8, 1)
+  job(9, 2)
+  let assert Ok(#(_, "start", _)) = process.receive(log, 1000)
+  let assert Ok(#(_, "start", _)) = process.receive(log, 1000)
+  // a crash is an error for its caller, not for the next operation
+  let assert Error(_) = doc_lock.run(locks, 7, 1000, fn() { panic as "boom" })
+  assert doc_lock.run(locks, 7, 1000, fn() { 42 }) == Ok(42)
 }

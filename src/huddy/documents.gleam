@@ -19,7 +19,8 @@ import gleam/result
 import gleam/string
 import huddy/blob.{type Location}
 import huddy/ctx.{type Ctx}
-import huddy/model.{type DocFile, type Document, DocFile}
+import huddy/doc_lock
+import huddy/model.{type DocFile, type DocRevision, type Document, DocFile}
 import huddy/state
 import huddy/store
 import huddy/sys
@@ -262,25 +263,52 @@ pub fn discard(ctx: Ctx, storage_key: String) -> Nil {
   Nil
 }
 
+/// How long an operation waits for earlier changes to the same document.
+const lock_timeout_ms = 120_000
+
 /// Upload a new document for `agent_id`, or a new version of any document
-/// (`replaces`). The title is `title`, else the first `# ` heading
-/// of index.md, else (for a new version) the previous title.
+/// (`replaces`, which must still be at the given revision). A new version is
+/// stored on the document's actor (`huddy/doc_lock`), after any other change
+/// to it. The title is `title`, else the first `# ` heading of index.md,
+/// else (for a new version) the previous title.
 pub fn upload(
   ctx: Ctx,
   agent_id: Int,
   upload: Upload,
   title: Option(String),
-  replaces: Option(Int),
+  replaces: Option(DocRevision),
+) -> Result(Document, String) {
+  use files <- result.try(unpack(upload, max_bytes(ctx)))
+  case replaces {
+    None -> store_version(ctx, agent_id, files, title, None)
+    Some(at) ->
+      doc_lock.run(ctx.doc_locks, at.id, lock_timeout_ms, fn() {
+        // refuse a stale revision before writing any files; put_document
+        // checks again when recording the change
+        use _ <- result.try(
+          store.read(ctx.store, fn(s, _) { state.check_revision(s, at) }),
+        )
+        store_version(ctx, agent_id, files, title, Some(at))
+      })
+      |> result.flatten
+  }
+}
+
+fn store_version(
+  ctx: Ctx,
+  agent_id: Int,
+  files: List(#(String, BitArray)),
+  title: Option(String),
+  replaces: Option(DocRevision),
 ) -> Result(Document, String) {
   let limit = ctx.config.limits.title_max_chars
-  use files <- result.try(unpack(upload, max_bytes(ctx)))
   let index =
     list.key_find(files, "index.md")
     |> result.try(bit_array.to_string)
     |> result.unwrap("")
   let previous_title =
-    option.then(replaces, fn(id) {
-      store.read(ctx.store, fn(s, _) { state.get_document(s, id) })
+    option.then(replaces, fn(at) {
+      store.read(ctx.store, fn(s, _) { state.get_document(s, at.id) })
       |> option.map(fn(d) { d.title })
     })
   let title =
@@ -351,22 +379,30 @@ pub fn upload(
   }
 }
 
-/// Delete a document and, once that is durable, its files. `actor` is
-/// `state.agent_actor(…)` or `state.user_actor(…)`.
-pub fn delete(ctx: Ctx, id: Int, actor: String) -> Result(Document, String) {
-  let deleted =
-    store.update(ctx.store, fn(s, e, now) {
-      case state.delete_document(s, id, actor, now) {
-        Ok(#(s, doc)) -> store.Changed(s, e, [store.Publish], Ok(doc))
-        Error(reason) -> store.NoChange(Error(reason))
-      }
-    })
-    |> result.flatten
-  case deleted {
-    Ok(doc) -> discard(ctx, doc.storage_key)
-    Error(_) -> Nil
-  }
-  deleted
+/// Delete a document, if it is still at the given revision, and once that
+/// is durable its files. Runs on the document's actor, after any other
+/// change to it. `actor` is `state.agent_actor(…)` or `state.user_actor(…)`.
+pub fn delete(
+  ctx: Ctx,
+  at: DocRevision,
+  actor: String,
+) -> Result(Document, String) {
+  doc_lock.run(ctx.doc_locks, at.id, lock_timeout_ms, fn() {
+    let deleted =
+      store.update(ctx.store, fn(s, e, now) {
+        case state.delete_document(s, at, actor, now) {
+          Ok(#(s, doc)) -> store.Changed(s, e, [store.Publish], Ok(doc))
+          Error(reason) -> store.NoChange(Error(reason))
+        }
+      })
+      |> result.flatten
+    case deleted {
+      Ok(doc) -> discard(ctx, doc.storage_key)
+      Error(_) -> Nil
+    }
+    deleted
+  })
+  |> result.flatten
 }
 
 /// One file of a document, if the document has it.

@@ -6,6 +6,7 @@
 
 import gleam/dict.{type Dict}
 import gleam/option.{type Option}
+import huddy/model.{type DocRevision}
 
 pub type LoginCode {
   LoginCode(
@@ -52,7 +53,8 @@ pub type DocUpload {
   DocUpload(
     agent: Int,
     title: Option(String),
-    replaces: Option(Int),
+    /// a new version of this document at this revision
+    replaces: Option(DocRevision),
     expires_at: Int,
   )
 }

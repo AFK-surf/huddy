@@ -727,7 +727,10 @@ pub fn documents_flow_test() {
   // plain Markdown, through a one-time upload URL
   let resp = upload_doc(alice, [], <<"# Design notes\n\nSome *text*.":utf8>>)
   assert resp.status == 200
-  assert string.contains(resp.body, "Stored doc1 v1 \\\"Design notes\\\"")
+  assert string.contains(
+    resp.body,
+    "Stored doc1 revision 1 \\\"Design notes\\\"",
+  )
 
   // a zip with an image, title given explicitly
   let png = <<0x89, "PNG":utf8, 13, 10, 26, 10, 1, 2, 3>>
@@ -738,7 +741,10 @@ pub fn documents_flow_test() {
     ])
   let resp = upload_doc(alice, [#("title", json.string("Architecture"))], zip)
   assert resp.status == 200
-  assert string.contains(resp.body, "Stored doc2 v1 \\\"Architecture\\\"")
+  assert string.contains(
+    resp.body,
+    "Stored doc2 revision 1 \\\"Architecture\\\"",
+  )
   assert string.contains(resp.body, "\"url\":\"" <> base(ctx) <> "/docs/doc2\"")
 
   // everyone can list and read every document
@@ -797,20 +803,52 @@ pub fn documents_flow_test() {
   assert is_error(resp)
   assert string.contains(tool_text(resp), "Its files: img/arch.png, index.md")
 
-  // any agent can replace any document; it keeps its id
+  // any agent can replace any document, naming the revision it read
+  let replace_doc1 = fn(revision) {
+    rpc(
+      bob,
+      [],
+      call(
+        "huddy_doc_upload",
+        json.object([
+          #("id", json.string("doc1")),
+          #("revision", json.int(revision)),
+        ]),
+      ),
+    )
+  }
   let resp =
-    upload_doc(bob, [#("id", json.string("doc1"))], <<"# Design notes v2":utf8>>)
-  assert string.contains(resp.body, "Stored doc1 v2")
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_upload", json.object([#("id", json.string("doc1"))])),
+    )
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "`revision` is required")
+  assert is_error(replace_doc1(2))
+  // two upload URLs for revision 1: the first upload wins, the second is
+  // refused because doc1 changed in between
+  let first = structured(replace_doc1(1), ["result", "upload_url"])
+  let second = structured(replace_doc1(1), ["result", "upload_url"])
+  let resp = send(http.Post, first, [], "# Design notes v2")
+  assert resp.status == 200
+  assert string.contains(resp.body, "Stored doc1 revision 2")
+  let resp = send(http.Post, second, [], "# Design notes v2 (lost update)")
+  assert resp.status == 400
+  assert string.contains(resp.body, "doc1 is at revision 2, not 1")
   let resp = rpc(alice, [], call("huddy_doc_list", json.object([])))
   assert string.contains(
     tool_text(resp),
-    "doc1 \"Design notes v2\" — alice/codex/huddy (v2 by bob/claude-code/api)",
+    "doc1 \"Design notes v2\" — alice/codex/huddy (revision 2 by bob/claude-code/api)",
   )
   let resp =
     rpc(
       bob,
       [],
-      call("huddy_doc_upload", json.object([#("id", json.string("doc42"))])),
+      call(
+        "huddy_doc_upload",
+        json.object([#("id", json.string("doc42")), #("revision", json.int(1))]),
+      ),
     )
   assert is_error(resp)
   assert string.contains(tool_text(resp), "No document doc42")
@@ -864,25 +902,29 @@ pub fn documents_flow_test() {
       "# Uploaded with curl\n",
     )
   assert ok.status == 200
-  assert string.contains(ok.body, "Stored doc3 v1")
+  assert string.contains(ok.body, "Stored doc3 revision 1")
   let again = send(http.Post, url, [], "# Again")
   assert again.status == 404
 
-  // any agent can delete any document
-  let resp =
+  // any agent can delete any document at the revision it read
+  let delete_doc3 = fn(revision) {
     rpc(
       bob,
       [],
-      call("huddy_doc_delete", json.object([#("id", json.string("doc3"))])),
+      call(
+        "huddy_doc_delete",
+        json.object([
+          #("id", json.string("doc3")),
+          #("revision", json.int(revision)),
+        ]),
+      ),
     )
-  assert string.contains(tool_text(resp), "Deleted doc3")
-  let resp =
-    rpc(
-      bob,
-      [],
-      call("huddy_doc_delete", json.object([#("id", json.string("doc3"))])),
-    )
+  }
+  let resp = delete_doc3(2)
   assert is_error(resp)
+  assert string.contains(tool_text(resp), "doc3 is at revision 1, not 2")
+  assert string.contains(tool_text(delete_doc3(1)), "Deleted doc3")
+  assert is_error(delete_doc3(1))
 
   // the web pages
   let cookie = web_session(ctx, "carol@acme.dev")
@@ -923,8 +965,12 @@ pub fn documents_flow_test() {
     send(
       http.Post,
       base(ctx) <> "/docs/doc2/delete",
-      [#("cookie", cookie), #("origin", base(ctx))],
-      "",
+      [
+        #("cookie", cookie),
+        #("origin", base(ctx)),
+        #("content-type", "application/x-www-form-urlencoded"),
+      ],
+      "revision=1",
     )
   assert deleted.status == 303
   assert get("/docs/doc2").status == 404

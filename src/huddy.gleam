@@ -14,6 +14,7 @@ import gleam/result
 import huddy/blob
 import huddy/config.{type Config}
 import huddy/ctx.{type Ctx, Ctx}
+import huddy/doc_lock
 import huddy/janitor
 import huddy/jev
 import huddy/mailer
@@ -88,6 +89,7 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
   use _ <- result.try(persist.load(storage.path, storage.backup_dir))
   let store_name = process.new_name("huddy_store")
   let store_subject = process.named_subject(store_name)
+  let locks_name = process.new_name("huddy_doc_locks")
   let static_dir = case overrides.static_dir {
     Some(dir) -> dir
     None ->
@@ -108,6 +110,7 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
     Ctx(
       config: cfg,
       store: store_subject,
+      doc_locks: process.named_subject(locks_name),
       ask:,
       boot_id: sys.random_token(8),
       static_dir:,
@@ -136,6 +139,7 @@ pub fn start(cfg: Config, overrides: Overrides) -> Result(Ctx, String) {
       }
     }),
   )
+  |> supervisor.add(supervision.worker(fn() { doc_lock.start(locks_name) }))
   |> supervisor.add(supervision.worker(fn() { janitor.start(ctx) }))
   |> supervisor.add(mist.supervised(server))
   |> supervisor.start

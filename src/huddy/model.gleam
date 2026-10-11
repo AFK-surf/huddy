@@ -112,6 +112,13 @@ pub type DocFile {
   DocFile(path: String, size: Int)
 }
 
+/// A document at a given revision (its `version`). Replacing or deleting a
+/// document names the revision the caller last saw; if the document has
+/// changed since, the change is refused.
+pub type DocRevision {
+  DocRevision(id: Int, revision: Int)
+}
+
 pub type FindingKind {
   Unclear
   NotAQuestion

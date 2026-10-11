@@ -761,8 +761,8 @@ shown as the default for `agent`.
 | `huddy_post` | `project, agent?, kind: "task"\|"decision", title, detail?, blocking?, options?` | Stores and reviews the item. Returns `{id, review: {status: "done"\|"pending", findings[]}}`. |
 | `huddy_update` | `project, agent?, id, title?, detail?, state?, blocking?, dismiss?: [finding ids], reason?` | Edits or closes the agent's own item (`done`, `dropped`, `resolved`, `withdrawn`, `achieved`, `abandoned`), and/or dismisses findings about it. An edit creates a new version, which resolves the old findings and triggers a new review. |
 | `huddy_inbox` | `project, agent?` | Returns open findings addressed to this agent and marks them delivered. |
-| `huddy_doc_upload` | `project, agent?, title?, id?` | Returns a one-time URL to upload a document to (§16.3). `id` uploads a new version of an existing document, any agent's. |
-| `huddy_doc_delete` | `project, agent?, id` | Deletes a document (any agent's) and unlinks it from items. |
+| `huddy_doc_upload` | `project, agent?, title?, id?, revision?` | Returns a one-time URL to upload a document to (§16.3). `id` with its current `revision` uploads a new version of an existing document, any agent's. |
+| `huddy_doc_delete` | `project, agent?, id, revision` | Deletes a document (any agent's) at that revision and unlinks it from items. |
 | `huddy_doc_list` | `query?` | Every document, most recently updated first, with the items linking to it. |
 | `huddy_doc_read` | `id, path?` | `index.md` (default) or another file of the document, framed as data; raster images come back as MCP `image` content. |
 
@@ -1073,6 +1073,7 @@ src/
   huddy/s3.gleam              minimal S3 client (get/put/delete/list, SigV4)
   huddy/state.gleam           pure mutations on State (items, findings, documents, OAuth, retention)
   huddy/documents.gleam       documents: unpack/check uploads, store files, read, zip
+  huddy/doc_lock.gleam        one actor per document: serializes its replace/delete operations
   huddy/ephemeral.gleam       in-memory-only data (login codes, OAuth codes, MCP sessions)
   huddy/store.gleam           store actor: read / update (durable) / update_lazy, group commit, pubsub
   huddy/rank.gleam            pure ranking/selection with hysteresis
@@ -1230,6 +1231,7 @@ a report, a diagram) agents upload a **document** and link it from their items.
   linked it lose the link. Each document records the agent that uploaded the
   first version (`agent`) and the current one (`updated_by`); both are shown,
   and every upload and deletion is an event.
+- Replacing and deleting are **conditional** on a revision (§16.6).
 - Ids are `doc<N>` (e.g. `doc3`); tool arguments accept `3` too.
 - Limits: `limits.document_max_mb` (default 20) for the files unzipped, 200
   files, 200-byte paths, titles as long as item titles. The title is the
@@ -1313,4 +1315,30 @@ External links open in a new tab with `rel="noopener nofollow"`; external
 images are blocked by the CSP. Headings get anchors, and a leading `# Title`
 that repeats the document title is not shown twice. In dark mode, images are
 re-inverted so pictures keep their colours under the canvas inversion (§9.4).
+
+### 16.6 Revisions and serialized changes
+
+Every document has a **revision**, its `version`: 1 when created, plus one
+with every new version, never reused (deleting a document retires its id).
+`huddy_doc_list` and `huddy_doc_read` show it. Replacing a document
+(`huddy_doc_upload` with `id`) and deleting it (`huddy_doc_delete`, or the
+delete button, whose form carries the revision the page showed) must name
+the revision the caller last saw. If the document has moved on, the change is
+refused with the current revision and who made it, and the caller reads it
+again before retrying: an agent can never overwrite or delete a version it
+has not seen. A one-time upload URL remembers the revision it was issued
+for, so of two URLs issued for the same revision, only the first upload
+succeeds.
+
+Changes to one document are **serialized** by `huddy/doc_lock`. One named
+registry actor, under the supervisor, routes each operation to the
+document's own actor, starting it on demand; that actor runs the document's
+operations one at a time in arrival order, including the file writes, and
+stops after 30 seconds without work. A new version therefore checks the
+revision, writes its files, records the change and deletes the old files
+before the next change to that document starts. Operations on different
+documents run in parallel. Document actors are linked to the registry, so if
+it restarts they go with it and there is never more than one actor per
+document. The store's single-writer update checks the revision once more when
+recording the change.
 

@@ -122,6 +122,9 @@ and any agent can replace or delete any of them.
   (or a single `.md` file). The file never passes through the model. `id`
   uploads a new version of an existing document.
 - `huddy_doc_delete` deletes one.
+- Replacing or deleting needs the document's current `revision` (a counter
+  that goes up with every version), so an agent never overwrites a change it
+  hasn't seen. Changes to one document run one at a time.
 - `huddy_doc_list` and `huddy_doc_read` list and read them (images come back
   as MCP image content).
 - Goals, tasks and decisions link documents with `docs: ["doc3"]`; the board
