@@ -223,12 +223,57 @@ pub fn prune_keeps_references_valid_test() {
       state.Edit(None, None, None, None, Some(model.Done), None),
       now,
     )
-  let policy = state.RetentionPolicy(30, 90, 14, 90)
+  let policy = state.RetentionPolicy(30, 90, 14, 90, 0)
   let s = state.prune(s, policy, now + state.days(31))
   assert state.get_item(s, mine.id) == None
   assert option.is_some(state.get_item(s, theirs.id))
   assert dict.values(s.findings)
     |> list.all(fn(f) { f.related_item != Some(mine.id) })
+}
+
+pub fn prune_closes_then_drops_inactive_agents_items_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, goal) = state.create_item(s, a, support.goal("Ship it"), now)
+  let #(s, task) = state.create_item(s, a, support.task("Deflake"), now)
+  let #(s, ask) =
+    state.create_item(s, a, support.decision("Which queue?", True), now)
+  let #(s, theirs) = state.create_item(s, b, support.task("Deflake too"), now)
+  let overlap =
+    state.NewFinding(
+      ..new_finding(b, theirs.id, 1, model.Overlap),
+      related_item: Some(task.id),
+    )
+  let #(s, _) = state.add_finding(s, overlap, now, 0)
+  let s = state.touch_agent(s, b, now + state.days(13))
+  let policy = state.RetentionPolicy(30, 90, 14, 90, 14)
+
+  // 0 keeps them open
+  let kept =
+    state.prune(
+      s,
+      state.RetentionPolicy(..policy, inactive_agent_days: 0),
+      now + state.days(15),
+    )
+  assert list.length(state.open_items(kept)) == 4
+
+  let later = now + state.days(15)
+  let s = state.prune(s, policy, later)
+  let state_of = fn(id) {
+    let assert Some(i) = state.get_item(s, id)
+    #(i.state, i.closed_at)
+  }
+  assert state_of(goal.id) == #(model.Abandoned, Some(later))
+  assert state_of(task.id) == #(model.Dropped, Some(later))
+  assert state_of(ask.id) == #(model.Withdrawn, Some(later))
+  let assert Some(i) = state.get_item(s, theirs.id)
+  assert model.is_open(i)
+  assert i.overlaps == None
+
+  // then retention deletes them like any closed item
+  let s = state.prune(s, policy, later + state.days(31))
+  assert state.get_item(s, goal.id) == None
+  assert state.get_item(s, task.id) == None
+  assert state.get_item(s, ask.id) == None
 }
 
 pub fn refresh_family_revocation_test() {

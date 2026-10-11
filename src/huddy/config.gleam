@@ -150,6 +150,9 @@ pub type Retention {
     events_days: Int,
     judgment_detail_days: Int,
     judgments_days: Int,
+    /// close an agent's open items once it hasn't been seen this long;
+    /// 0 never does
+    inactive_agent_days: Int,
   )
 }
 
@@ -266,7 +269,7 @@ pub fn decoder() -> Decoder(Config) {
   use retention <- section(
     "retention",
     retention_decoder(),
-    Retention(30, 90, 14, 90),
+    Retention(30, 90, 14, 90, 14),
   )
   use trusted_proxies <- decode.then(
     case list.try_map(trusted, net.parse_cidr) {
@@ -673,11 +676,13 @@ fn retention_decoder() -> Decoder(Retention) {
   use e <- opt("events_days", 90, decode.int)
   use jd <- opt("judgment_detail_days", 14, decode.int)
   use j <- opt("judgments_days", 90, decode.int)
+  use ia <- opt("inactive_agent_days", 14, decode.int)
   decode.success(Retention(
     closed_items_days: c,
     events_days: e,
     judgment_detail_days: jd,
     judgments_days: j,
+    inactive_agent_days: ia,
   ))
 }
 

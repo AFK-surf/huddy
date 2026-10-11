@@ -98,6 +98,7 @@
     "closed_items_days": 30,
     "events_days": 90,
     "judgment_detail_days": 14,
-    "judgments_days": 90
+    "judgments_days": 90,
+    "inactive_agent_days": 14
   }
 }

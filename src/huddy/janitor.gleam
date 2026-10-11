@@ -56,7 +56,8 @@ fn handle(self: Self, msg: Msg) -> actor.Next(Self, Msg) {
   }
 }
 
-/// Prune by retention, then write today's backup.
+/// Close inactive agents' items and prune by retention, then write today's
+/// backup.
 pub fn daily(ctx: Ctx) -> Nil {
   let r = ctx.config.retention
   let policy =
@@ -65,6 +66,7 @@ pub fn daily(ctx: Ctx) -> Nil {
       events_days: r.events_days,
       judgment_detail_days: r.judgment_detail_days,
       judgments_days: r.judgments_days,
+      inactive_agent_days: r.inactive_agent_days,
     )
   let _ =
     store.update(ctx.store, fn(s, e, now) {

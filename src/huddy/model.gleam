@@ -366,6 +366,15 @@ pub fn closing_states(kind: Kind) -> List(ItemState) {
   }
 }
 
+/// The closing state for an item given up rather than finished.
+pub fn given_up_state(kind: Kind) -> ItemState {
+  case kind {
+    Goal -> Abandoned
+    Task -> Dropped
+    Decision -> Withdrawn
+  }
+}
+
 pub fn is_open(item: Item) -> Bool {
   option.is_none(item.closed_at)
 }

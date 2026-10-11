@@ -372,7 +372,7 @@ pub fn create_item(
       open_items_of(state, agent_id)
       |> list.filter(fn(i) { i.kind == model.Goal })
       |> list.fold(state, fn(s, goal) {
-        close_item(s, goal, model.Replaced, now, agent_actor(agent_id))
+        close_item(s, goal, model.Replaced, now, agent_actor(agent_id), "")
       })
     _ -> state
   }
@@ -525,7 +525,7 @@ pub fn edit_item(
   let state = case new_state {
     Some(s) -> {
       let current = get_item(state, id) |> option.unwrap(item)
-      close_item(state, current, s, now, actor)
+      close_item(state, current, s, now, actor, "")
     }
     None -> state
   }
@@ -535,13 +535,15 @@ pub fn edit_item(
 }
 
 /// Close an item: set the final state, resolve its findings and any
-/// duplicate/overlap findings that point at it.
+/// duplicate/overlap findings that point at it. `note` is appended to the
+/// event's detail.
 fn close_item(
   state: State,
   item: Item,
   to: ItemState,
   now: Int,
   actor: String,
+  note: String,
 ) -> State {
   let closed = Item(..item, state: to, closed_at: Some(now), updated_at: now)
   let state =
@@ -573,7 +575,7 @@ fn close_item(
     actor,
     Some(item.id),
     "item_closed",
-    model.state_to_string(to),
+    model.state_to_string(to) <> note,
   )
 }
 
@@ -1402,11 +1404,45 @@ pub type RetentionPolicy {
     events_days: Int,
     judgment_detail_days: Int,
     judgments_days: Int,
+    /// 0 keeps inactive agents' items open
+    inactive_agent_days: Int,
   )
 }
 
-/// Prune old data, keeping referential integrity.
+/// Close the open items of agents not seen for `days` (0: never), as given
+/// up: goals abandoned, tasks dropped, decisions withdrawn. They then age out
+/// like any other closed item.
+pub fn close_inactive(state: State, days: Int, now: Int) -> State {
+  case days > 0 {
+    False -> state
+    True -> {
+      let cutoff = now - days * day_ms
+      let inactive = fn(agent_id) {
+        case get_agent(state, agent_id) {
+          Some(a) -> a.last_seen_at < cutoff
+          None -> True
+        }
+      }
+      let note = " (agent inactive for " <> int.to_string(days) <> " days)"
+      open_items(state)
+      |> list.filter(fn(i) { inactive(i.agent) })
+      |> list.map(fn(i) { i.id })
+      |> list.fold(state, fn(s, id) {
+        // re-read: closing one item can update another's flags
+        case get_item(s, id) {
+          Some(i) ->
+            close_item(s, i, model.given_up_state(i.kind), now, "janitor", note)
+          None -> s
+        }
+      })
+    }
+  }
+}
+
+/// Close inactive agents' items, then prune old data, keeping referential
+/// integrity.
 pub fn prune(state: State, policy: RetentionPolicy, now: Int) -> State {
+  let state = close_inactive(state, policy.inactive_agent_days, now)
   let item_cutoff = now - policy.closed_items_days * day_ms
   let doomed =
     dict.values(state.items)
