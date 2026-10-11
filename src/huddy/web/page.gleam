@@ -61,6 +61,7 @@ pub fn filters_from_query(query: List(#(String, String))) -> rank.Filters {
     project: get("project"),
     name: get("name"),
     expand: get("expand"),
+    hide_away: get("away") != Some("show"),
   )
 }
 
@@ -71,6 +72,10 @@ fn query_string(filters: rank.Filters) -> String {
       #("project", filters.project),
       #("name", filters.name),
       #("expand", filters.expand),
+      #("away", case filters.hide_away {
+        True -> None
+        False -> Some("show")
+      }),
     ]
     |> list.filter_map(fn(p) {
       case p.1 {
@@ -204,12 +209,15 @@ fn agents(board: Board) -> String {
       list.map(board.view.agents, fn(a) {
         let href =
           "/"
-          <> query_string(rank.Filters(
-            owner: Some(a.owner_handle),
-            project: Some(a.agent.project),
-            name: Some(a.agent.name),
-            expand: None,
-          ))
+          <> query_string(
+            rank.Filters(
+              ..f,
+              owner: Some(a.owner_handle),
+              project: Some(a.agent.project),
+              name: Some(a.agent.name),
+              expand: None,
+            ),
+          )
         html.a(
           href,
           [
@@ -238,11 +246,36 @@ fn agents(board: Board) -> String {
       }),
       [
         html.when(filtered, fn() {
-          html.a("/", [html.class("clear")], [html.text("× show everyone")])
+          html.a(
+            "/"
+              <> query_string(
+              rank.Filters(..rank.no_filters(), hide_away: f.hide_away),
+            ),
+            [html.class("clear")],
+            [html.text("× show everyone")],
+          )
         }),
+        html.when(
+          f.hide_away || list.any(board.view.agents, fn(a) { a.away }),
+          fn() {
+            html.a(
+              "/" <> query_string(rank.Filters(..f, hide_away: !f.hide_away)),
+              [html.class("clear")],
+              [
+                html.text(case f.hide_away {
+                  True -> "show away agents"
+                  False -> "hide away agents"
+                }),
+              ],
+            )
+          },
+        ),
         html.when(board.view.agents == [], fn() {
           html.span([html.class("muted")], [
-            html.text("No agents yet. Connect one from "),
+            html.text(case f.hide_away {
+              True -> "No active agents. Connect one from "
+              False -> "No agents yet. Connect one from "
+            }),
             html.a("/settings", [], [html.text("settings")]),
             html.text("."),
           ])

@@ -269,7 +269,7 @@ pub fn decoder() -> Decoder(Config) {
   use retention <- section(
     "retention",
     retention_decoder(),
-    Retention(30, 90, 14, 90, 14),
+    Retention(30, 90, 14, 90, 3),
   )
   use trusted_proxies <- decode.then(
     case list.try_map(trusted, net.parse_cidr) {
@@ -676,7 +676,7 @@ fn retention_decoder() -> Decoder(Retention) {
   use e <- opt("events_days", 90, decode.int)
   use jd <- opt("judgment_detail_days", 14, decode.int)
   use j <- opt("judgments_days", 90, decode.int)
-  use ia <- opt("inactive_agent_days", 14, decode.int)
+  use ia <- opt("inactive_agent_days", 3, decode.int)
   decode.success(Retention(
     closed_items_days: c,
     events_days: e,

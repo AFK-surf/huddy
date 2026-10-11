@@ -68,7 +68,7 @@ pub fn config(dir: String, port: Int) -> Config {
       writes_per_agent_per_minute: 1000,
       document_max_mb: 2,
     ),
-    retention: config.Retention(30, 90, 14, 90, 14),
+    retention: config.Retention(30, 90, 14, 90, 3),
   )
 }
 

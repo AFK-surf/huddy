@@ -656,7 +656,10 @@ fn dispatch(
       let filters = case string.split(uri, "/") {
         ["huddy:", "", "display"] -> Ok(#(False, rank.no_filters()))
         ["huddy:", "", "agents", owner, name, project] ->
-          Ok(#(True, rank.Filters(Some(owner), Some(project), Some(name), None)))
+          Ok(#(
+            True,
+            rank.Filters(Some(owner), Some(project), Some(name), None, False),
+          ))
         _ -> Error(Nil)
       }
       case filters {

@@ -244,19 +244,19 @@ pub fn prune_closes_then_drops_inactive_agents_items_test() {
       related_item: Some(task.id),
     )
   let #(s, _) = state.add_finding(s, overlap, now, 0)
-  let s = state.touch_agent(s, b, now + state.days(13))
-  let policy = state.RetentionPolicy(30, 90, 14, 90, 14)
+  let s = state.touch_agent(s, b, now + state.days(2))
+  let policy = state.RetentionPolicy(30, 90, 14, 90, 3)
 
   // 0 keeps them open
   let kept =
     state.prune(
       s,
       state.RetentionPolicy(..policy, inactive_agent_days: 0),
-      now + state.days(15),
+      now + state.days(4),
     )
   assert list.length(state.open_items(kept)) == 4
 
-  let later = now + state.days(15)
+  let later = now + state.days(4)
   let s = state.prune(s, policy, later)
   let state_of = fn(id) {
     let assert Some(i) = state.get_item(s, id)
