@@ -322,6 +322,29 @@ pub fn comments_repeat_until_acked_even_after_close_test() {
   assert state.unacked(s, a) == #([], [])
 }
 
+pub fn unsent_entries_are_news_until_sent_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, t) = state.create_item(s, a, support.task("Work"), now)
+  assert !state.has_unsent(s, a)
+  // the agent's own reply is no news to it
+  let assert Ok(#(s, _)) =
+    state.add_comment(s, t.id, model.AgentAuthor(a), "ok", None, limits, now)
+  assert !state.has_unsent(s, a)
+  let assert Ok(#(s, c)) =
+    state.add_comment(s, t.id, model.HumanAuthor(2), "wait", None, limits, now)
+  assert state.has_unsent(s, a)
+  assert !state.has_unsent(s, b)
+  // sent but unacknowledged: still repeated, but no longer news
+  let s = state.mark_sent(s, [c.id], [], now)
+  assert !state.has_unsent(s, a)
+  let assert #(s, Some(f)) =
+    state.add_finding(s, new_finding(a, t.id, 1, model.Unclear), now, 0)
+  assert state.has_unsent(s, a)
+  // acknowledging without a send also ends it
+  let assert Ok(s) = state.ack(s, a, [state.AckFinding(f.id)], now)
+  assert !state.has_unsent(s, a)
+}
+
 pub fn pruning_drops_comments_with_their_item_test() {
   let #(s, a, _) = support.two_agents(now)
   let #(s, t) = state.create_item(s, a, support.task("Work"), now)

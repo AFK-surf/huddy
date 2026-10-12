@@ -7,6 +7,7 @@ import e2e_test.{
   base, boot, call, is_error, rpc, send, structured, tool_text, user_with_link,
   web_session,
 }
+import gleam/erlang/process
 import gleam/http
 import gleam/int
 import gleam/json
@@ -14,6 +15,7 @@ import gleam/list
 import gleam/option.{Some}
 import gleam/string
 import gleam/uri
+import huddy/sys
 
 pub fn comments_flow_test() {
   let #(ctx, _) = boot(48_309)
@@ -349,6 +351,79 @@ pub fn tasks_show_under_their_goals_test() {
   // agents see where their tasks are filed
   let read = rpc(alice, [], call("huddy_read", json.object([]))) |> tool_text
   assert string.contains(read, "under goal " <> docs)
+}
+
+pub fn wait_returns_when_an_answer_arrives_test() {
+  let #(ctx, _) = boot(48_318)
+  let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let bob = web_session(ctx, "bob@acme.dev")
+  let answer = fn(n: String, body: String) {
+    let resp =
+      send(
+        http.Post,
+        base(ctx) <> "/items/" <> n <> "/comment",
+        [
+          #("cookie", bob),
+          #("origin", base(ctx)),
+          #("content-type", "application/x-www-form-urlencoded"),
+          #("x-huddy-fetch", "1"),
+        ],
+        "body=" <> body,
+      )
+    assert resp.status == 204
+  }
+  // returns the text and how long the call took
+  let wait = fn(seconds: Int) {
+    let started = sys.now_ms()
+    let resp =
+      rpc(
+        alice,
+        [],
+        call("huddy_wait", json.object([#("timeout_s", json.int(seconds))])),
+      )
+    assert !is_error(resp)
+    #(tool_text(resp), sys.now_ms() - started)
+  }
+  let posted =
+    rpc(
+      alice,
+      [],
+      call(
+        "huddy_post",
+        json.object([
+          #("kind", json.string("decision")),
+          #("title", json.string("Which region for the database?")),
+          #("blocking", json.bool(True)),
+        ]),
+      ),
+    )
+  let decision = structured(posted, ["result", "id"])
+  let n = string.drop_start(decision, 1)
+  // nothing arrives: it times out
+  let #(text, took) = wait(1)
+  assert string.contains(text, "Nothing new after 1 s.")
+  assert took >= 1000
+  // bob answers while alice waits: she gets it right away
+  process.spawn(fn() {
+    process.sleep(300)
+    answer(n, "eu-west")
+  })
+  let #(text, took) = wait(4)
+  assert took < 3000
+  assert string.starts_with(text, "📬 Unacknowledged (1).")
+  assert string.contains(text, "💬 c1 on " <> decision)
+  assert string.contains(text, "Something arrived")
+  // sent but not acknowledged: still repeated, but the next wait waits
+  let #(text, took) = wait(1)
+  assert took >= 1000
+  assert string.contains(text, "💬 c1 on " <> decision)
+  assert string.contains(text, "Nothing new after 1 s.")
+  // an answer that came in between calls returns at once
+  answer(n, "or+us-east")
+  let #(text, took) = wait(4)
+  assert took < 1000
+  assert string.contains(text, "💬 c2 on " <> decision)
+  assert string.contains(text, "Something arrived")
 }
 
 fn result_or(r: Result(a, Nil), default: a) -> a {

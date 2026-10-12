@@ -7,6 +7,8 @@ import gleam/bit_array
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/erlang/process.{type Subject}
+import gleam/float
 import gleam/int
 import gleam/json.{type Json}
 import gleam/list
@@ -22,7 +24,7 @@ import huddy/model.{type Finding, type McpLink, type User}
 import huddy/rank
 import huddy/reviewer
 import huddy/state
-import huddy/store
+import huddy/store.{type BoardEvent}
 import huddy/sys
 
 pub type Principal {
@@ -43,6 +45,7 @@ pub const write_tools = [
   "huddy_update",
   "huddy_inbox",
   "huddy_ack",
+  "huddy_wait",
   "huddy_doc_upload",
   "huddy_doc_delete",
   "huddy_doc_share",
@@ -57,7 +60,7 @@ pub fn instructions(ctx: Ctx) -> String {
 2. Keep at most "
   <> int.to_string(r.open_tasks_guideline)
   <> " tasks open. Post a task (huddy_post) when you start a distinct piece of work; mark it `done` with huddy_update when finished.
-3. When you're unsure about a choice a human would care about, post a `decision`, with options if you can. Set `blocking: true` only if you have stopped and are waiting. Your human is notified and may answer in this session, or any teammate may answer on Huddy: answers arrive in your Huddy tool results as 💬 comments, and any teammate's answer counts. Mark the decision `resolved` once answered. Keep at most "
+3. When you're unsure about a choice a human would care about, post a `decision`, with options if you can. Set `blocking: true` only if you have stopped and are waiting. Your human is notified and may answer in this session, or any teammate may answer on Huddy: answers arrive in your Huddy tool results as 💬 comments, and any teammate's answer counts. If you have stopped to wait for an answer, call huddy_wait: it returns as soon as something arrives. Mark the decision `resolved` once answered. Keep at most "
   <> int.to_string(r.open_decisions_guideline)
   <> " decisions open.
 4. Write for a teammate who hasn't seen your session: plain words, no file dumps.
@@ -493,6 +496,33 @@ pub fn definitions(ctx: Ctx, principal: Principal) -> List(Json) {
       required(["id"]),
       False,
     ),
+    tool(
+      "huddy_wait",
+      "Wait for comments and findings",
+      "Wait until a teammate comments on one of your items (e.g. answers your decision) or a review finding arrives, then return it. Returns at once if something arrived since your last Huddy result, and after `timeout_s` if nothing does: call it again to keep waiting. Use it when you have stopped to wait for an answer.",
+      list.flatten([
+        identity_props(),
+        [
+          prop("timeout_s", [
+            #("type", json.string("integer")),
+            #("minimum", json.int(1)),
+            #("maximum", json.int(wait_max_s)),
+            #(
+              "description",
+              json.string(
+                "Seconds to wait at most (default "
+                <> int.to_string(wait_default_s)
+                <> ", at most "
+                <> int.to_string(wait_max_s)
+                <> "). Keep it below your client's tool-call timeout.",
+              ),
+            ),
+          ]),
+        ],
+      ]),
+      required([]),
+      False,
+    ),
   ]
   |> list.append(case ctx.config.documents.public_links {
     False -> []
@@ -740,6 +770,16 @@ pub fn call(
         Some(inbox_cap),
         ack,
       )
+    "huddy_wait" ->
+      write_with(
+        ctx,
+        principal,
+        client_name,
+        args,
+        RateLimit("mcp-wait", waits_per_agent_per_minute),
+        Some(inbox_cap),
+        wait,
+      )
     "huddy_doc_upload" -> write(ctx, principal, client_name, args, doc_upload)
     "huddy_doc_delete" -> write(ctx, principal, client_name, args, doc_delete)
     "huddy_doc_share" -> write(ctx, principal, client_name, args, doc_share)
@@ -759,6 +799,10 @@ type RateLimit {
 }
 
 const acks_per_agent_per_minute = 60
+
+/// Waits that return at once (something unacknowledged keeps arriving) can't
+/// spin faster than this.
+const waits_per_agent_per_minute = 30
 
 fn writes_limit(ctx: Ctx) -> RateLimit {
   RateLimit("mcp-write", ctx.config.limits.writes_per_agent_per_minute)
@@ -1118,7 +1162,7 @@ fn create(
               None -> ""
             }
           model.Decision ->
-            " Your human is notified. The answer comes in your session, or as a 💬 comment in your Huddy results. Mark it resolved with huddy_update once answered."
+            " Your human is notified. The answer comes in your session, or as a 💬 comment in your Huddy results (call huddy_wait if you stop to wait for it). Mark it resolved with huddy_update once answered."
           model.Task -> ""
         }
         <> case done {
@@ -1468,6 +1512,98 @@ fn ack(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
           }
         }
       }
+  }
+}
+
+/// `huddy_wait` waits this long by default: under the 60 s at which many
+/// clients and proxies give up on a request.
+const wait_default_s = 50
+
+const wait_max_s = 300
+
+/// A wait checks again at least this often, even without a board event: a
+/// restarted store has lost its subscribers.
+const wait_recheck_ms = 5000
+
+fn wait(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
+  let seconds =
+    decode.run(
+      args,
+      decode.at(
+        ["timeout_s"],
+        decode.one_of(decode.int, [decode.float |> decode.map(float.round)]),
+      ),
+    )
+    |> result.unwrap(wait_default_s)
+    |> int.clamp(1, wait_max_s)
+  let arrived = wait_for_news(ctx, agent.id, seconds * 1000)
+  let text = case arrived {
+    True ->
+      "Something arrived: it is listed above. Act on it, then acknowledge it with huddy_ack."
+    False ->
+      "Nothing new after "
+      <> int.to_string(seconds)
+      <> " s. Call huddy_wait again to keep waiting."
+  }
+  #(
+    ok(
+      text,
+      json.object([
+        #("arrived", json.bool(arrived)),
+        #("timeout_s", json.int(seconds)),
+      ]),
+    ),
+    None,
+  )
+}
+
+/// Block until the agent has something unacknowledged that it hasn't been
+/// sent yet (`state.has_unsent`), or `timeout_ms` passes. Board changes wake
+/// the check; it also runs every `wait_recheck_ms`.
+fn wait_for_news(ctx: Ctx, agent_id: Int, timeout_ms: Int) -> Bool {
+  let news = fn() {
+    store.read(ctx.store, fn(s, _) { state.has_unsent(s, agent_id) })
+  }
+  case news() {
+    True -> True
+    False -> {
+      let subject = process.new_subject()
+      // user 0: no decision notifications, only board changes
+      store.subscribe(ctx.store, subject, 0)
+      let arrived = wait_loop(subject, news, sys.now_ms() + timeout_ms)
+      store.unsubscribe(ctx.store, subject)
+      // The store handles messages in order: once this read returns, it has
+      // dropped the subscription, so draining now leaves nothing behind in
+      // this (possibly kept-alive) connection's mailbox.
+      let _ = news()
+      drain(subject)
+      arrived
+    }
+  }
+}
+
+fn wait_loop(
+  subject: Subject(BoardEvent),
+  news: fn() -> Bool,
+  deadline: Int,
+) -> Bool {
+  let left = deadline - sys.now_ms()
+  case left <= 0 {
+    True -> news()
+    False -> {
+      let _ = process.receive(subject, int.min(left, wait_recheck_ms))
+      case news() {
+        True -> True
+        False -> wait_loop(subject, news, deadline)
+      }
+    }
+  }
+}
+
+fn drain(subject: Subject(a)) -> Nil {
+  case process.receive(subject, 0) {
+    Ok(_) -> drain(subject)
+    Error(_) -> Nil
   }
 }
 

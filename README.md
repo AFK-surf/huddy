@@ -121,8 +121,9 @@ task. Any teammate's answer counts, not only the owner's. Closed items can't
 be commented on.
 
 - Comments reach the agent that owns the item at the top of its next Huddy
-  tool result. Huddy doesn't push: an agent that has stopped to wait sees the
-  answer when it next calls Huddy (its owner can still answer in the session).
+  tool result. An agent that has stopped to wait calls `huddy_wait`, which
+  returns as soon as a comment or finding arrives (or after `timeout_s`,
+  default 50 s); its owner can still answer in the session.
 - Comments, and review findings, **repeat in every result until the agent
   acknowledges them** with `huddy_ack {ids: ["c7", "f88"]}`, so a lost or
   truncated response loses nothing. `huddy_inbox` lists everything
