@@ -14,6 +14,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/set
 import gleam/string
 import huddy/config
 import huddy/ctx.{type Ctx}
@@ -891,11 +892,8 @@ fn with_inbox(
           list.map(review, InboxFinding(_, True)),
           list.map(other, InboxFinding(_, False)),
         ])
-      let #(shown, rest) = case cap {
-        Some(n) -> list.split(entries, n)
-        None -> #(entries, [])
-      }
-      let inbox = render_inbox(s, agent.id, shown, list.length(rest), now)
+      let #(shown, more) = pick_shown(entries, cap)
+      let inbox = render_inbox(s, agent.id, shown, more, now)
       let comment_ids =
         list.filter_map(shown, fn(entry) {
           case entry {
@@ -952,6 +950,50 @@ type InboxEntry {
   InboxComment(model.Comment)
   /// a finding, and whether it is about the item the call just wrote
   InboxFinding(Finding, Bool)
+}
+
+/// At most `cap` entries, in their order, and how many are left out. When
+/// some must be left out, those never sent before are kept first: otherwise
+/// news could sit behind entries the agent has already seen and never go
+/// out (and `huddy_wait`, which returns on news, would return at once again
+/// and again without showing it).
+fn pick_shown(
+  entries: List(InboxEntry),
+  cap: Option(Int),
+) -> #(List(InboxEntry), Int) {
+  case cap {
+    Some(n) ->
+      case list.length(entries) - n {
+        more if more > 0 -> {
+          let #(unsent, sent) = list.partition(entries, entry_unsent)
+          let keep =
+            list.append(unsent, sent)
+            |> list.take(n)
+            |> list.map(entry_ref)
+            |> set.from_list
+          #(
+            list.filter(entries, fn(e) { set.contains(keep, entry_ref(e)) }),
+            more,
+          )
+        }
+        _ -> #(entries, 0)
+      }
+    None -> #(entries, 0)
+  }
+}
+
+fn entry_unsent(entry: InboxEntry) -> Bool {
+  case entry {
+    InboxComment(c) -> state.comment_unsent(c)
+    InboxFinding(f, _) -> state.finding_unsent(f)
+  }
+}
+
+fn entry_ref(entry: InboxEntry) -> String {
+  case entry {
+    InboxComment(c) -> model.comment_ref(c.id)
+    InboxFinding(f, _) -> model.finding_ref(f.id)
+  }
 }
 
 type Inbox {
@@ -1519,24 +1561,55 @@ fn ack(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
 /// clients and proxies give up on a request.
 const wait_default_s = 50
 
-const wait_max_s = 300
+/// Longer waits would outlast those clients and proxies. An answer that
+/// arrives after the client gave up still counts as sent, so the agent's next
+/// wait wouldn't return on it (it shows above the result, but only when that
+/// wait ends): keeping waits short bounds the delay.
+const wait_max_s = 60
 
 /// A wait checks again at least this often, even without a board event: a
 /// restarted store has lost its subscribers.
 const wait_recheck_ms = 5000
 
 fn wait(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
-  let seconds =
-    decode.run(
-      args,
-      decode.at(
-        ["timeout_s"],
-        decode.one_of(decode.int, [decode.float |> decode.map(float.round)]),
-      ),
-    )
-    |> result.unwrap(wait_default_s)
-    |> int.clamp(1, wait_max_s)
-  let arrived = wait_for_news(ctx, agent.id, seconds * 1000)
+  case arg_timeout(args) {
+    Error(e) -> #(error(e), None)
+    Ok(seconds) -> waited(seconds, wait_for_news(ctx, agent.id, seconds * 1000))
+  }
+}
+
+/// `timeout_s`: a number of seconds (or one as a string), clamped to
+/// 1..`wait_max_s`; `wait_default_s` when absent.
+fn arg_timeout(args: Args) -> Result(Int, String) {
+  case arg_present(args, "timeout_s") {
+    False -> Ok(wait_default_s)
+    True ->
+      decode.run(
+        args,
+        decode.at(
+          ["timeout_s"],
+          decode.one_of(decode.int, [
+            decode.float |> decode.map(float.round),
+            decode.string
+              |> decode.then(fn(t) {
+                case int.parse(string.trim(t)) {
+                  Ok(n) -> decode.success(n)
+                  Error(_) -> decode.failure(0, "Int")
+                }
+              }),
+          ]),
+        ),
+      )
+      |> result.map(int.clamp(_, 1, wait_max_s))
+      |> result.replace_error(
+        "`timeout_s` must be a number of seconds, at most "
+        <> int.to_string(wait_max_s)
+        <> ".",
+      )
+  }
+}
+
+fn waited(seconds: Int, arrived: Bool) -> #(ToolResult, Option(Int)) {
   let text = case arrived {
     True ->
       "Something arrived: it is listed above. Act on it, then acknowledge it with huddy_ack."
@@ -1562,24 +1635,24 @@ fn wait(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
 /// the check; it also runs every `wait_recheck_ms`.
 fn wait_for_news(ctx: Ctx, agent_id: Int, timeout_ms: Int) -> Bool {
   let news = fn() {
-    store.read(ctx.store, fn(s, _) { state.has_unsent(s, agent_id) })
+    // a store that is restarting may not answer in time: no news yet
+    sys.capture(fn() {
+      store.read(ctx.store, fn(s, _) { state.has_unsent(s, agent_id) })
+    })
+    |> result.unwrap(False)
   }
-  case news() {
-    True -> True
-    False -> {
-      let subject = process.new_subject()
-      // user 0: no decision notifications, only board changes
-      store.subscribe(ctx.store, subject, 0)
-      let arrived = wait_loop(subject, news, sys.now_ms() + timeout_ms)
-      store.unsubscribe(ctx.store, subject)
-      // The store handles messages in order: once this read returns, it has
-      // dropped the subscription, so draining now leaves nothing behind in
-      // this (possibly kept-alive) connection's mailbox.
-      let _ = news()
-      drain(subject)
-      arrived
-    }
-  }
+  // Subscribe before the first check, so nothing can land in between unseen.
+  // User 0: no decision notifications, only board changes.
+  let subject = process.new_subject()
+  store.subscribe(ctx.store, subject, 0)
+  let arrived = wait_loop(subject, news, sys.now_ms() + timeout_ms)
+  store.unsubscribe(ctx.store, subject)
+  // The store handles messages in order: once this read returns, it has
+  // dropped the subscription, so draining now leaves nothing behind in this
+  // (possibly kept-alive) connection's mailbox.
+  let _ = news()
+  drain(subject)
+  arrived
 }
 
 fn wait_loop(
@@ -1587,14 +1660,18 @@ fn wait_loop(
   news: fn() -> Bool,
   deadline: Int,
 ) -> Bool {
-  let left = deadline - sys.now_ms()
-  case left <= 0 {
-    True -> news()
+  // events that queued up meanwhile all lead to this one check
+  drain(subject)
+  case news() {
+    True -> True
     False -> {
-      let _ = process.receive(subject, int.min(left, wait_recheck_ms))
-      case news() {
-        True -> True
-        False -> wait_loop(subject, news, deadline)
+      let left = deadline - sys.now_ms()
+      case left <= 0 {
+        True -> False
+        False -> {
+          let _ = process.receive(subject, int.min(left, wait_recheck_ms))
+          wait_loop(subject, news, deadline)
+        }
       }
     }
   }

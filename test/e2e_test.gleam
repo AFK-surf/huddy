@@ -179,7 +179,7 @@ pub fn user_with_link(
 }
 
 pub fn login_flow_test() {
-  let #(ctx, mails) = boot(48_301)
+  let #(ctx, mails) = boot(28_301)
   let resp =
     send(
       http.Post,
@@ -259,7 +259,7 @@ pub fn login_flow_test() {
 }
 
 pub fn mcp_legacy_and_modern_test() {
-  let #(ctx, _) = boot(48_302)
+  let #(ctx, _) = boot(28_302)
   let alice = user_with_link(ctx, "alice@acme.dev", None)
   let bob = user_with_link(ctx, "bob@acme.dev", Some(#("claude-code", "api")))
   // legacy initialize gives a session that remembers the client name
@@ -489,7 +489,7 @@ pub fn mcp_legacy_and_modern_test() {
 }
 
 pub fn oauth_flow_test() {
-  let #(ctx, _) = boot(48_303)
+  let #(ctx, _) = boot(28_303)
   let b = base(ctx)
   // unauthenticated: 401 with the protected-resource metadata pointer
   let unauth = rpc(b <> "/mcp", [], call("huddy_read", json.object([])))
@@ -694,7 +694,7 @@ fn link_ips(ctx: Ctx) -> List(Option(String)) {
 
 pub fn link_records_client_ip_test() {
   // an untrusted peer can't claim another address with X-Forwarded-For
-  let #(ctx, _) = boot(48_306)
+  let #(ctx, _) = boot(28_306)
   let link = user_with_link(ctx, "alice@acme.dev", None)
   assert link_ips(ctx) == [None]
   let resp =
@@ -711,7 +711,7 @@ pub fn link_records_forwarded_client_ip_test() {
   let assert Ok(local) = net.parse_cidr("127.0.0.1/32")
   let assert Ok(proxy) = net.parse_cidr("10.0.0.0/8")
   let #(ctx, _) =
-    boot_with(48_307, fn(cfg) {
+    boot_with(28_307, fn(cfg) {
       config.Config(..cfg, trusted_proxies: [local, proxy])
     })
   let link = user_with_link(ctx, "alice@acme.dev", None)
@@ -733,7 +733,7 @@ fn goal_id(resp: Response(String)) -> String {
 }
 
 pub fn several_goals_test() {
-  let #(ctx, _) = boot(48_308)
+  let #(ctx, _) = boot(28_308)
   let link = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let set_goal = fn(fields) {
     rpc(
@@ -778,7 +778,7 @@ pub fn several_goals_test() {
 }
 
 pub fn concurrent_writes_are_durable_test() {
-  let #(ctx, _) = boot(48_304)
+  let #(ctx, _) = boot(28_304)
   let link = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let done = process.new_subject()
   list.each(list.repeat(Nil, 20) |> list.index_map(fn(_, i) { i }), fn(i) {
@@ -845,7 +845,7 @@ pub fn is_error(resp: Response(String)) -> Bool {
 }
 
 pub fn documents_flow_test() {
-  let #(ctx, _) = boot(48_305)
+  let #(ctx, _) = boot(28_305)
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = user_with_link(ctx, "bob@acme.dev", Some(#("claude-code", "api")))
 
@@ -1173,7 +1173,7 @@ pub fn documents_flow_test() {
 }
 
 pub fn public_sharing_test() {
-  let #(ctx, _) = boot(48_313)
+  let #(ctx, _) = boot(28_313)
   let agent = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let png = <<0x89, "PNG":utf8, 13, 10, 26, 10, 1, 2, 3>>
   let assert Ok(zip) =
@@ -1326,7 +1326,7 @@ pub fn public_sharing_test() {
 }
 
 pub fn agents_share_documents_test() {
-  let #(ctx, _) = boot(48_315)
+  let #(ctx, _) = boot(28_315)
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = user_with_link(ctx, "bob@acme.dev", Some(#("claude-code", "api")))
   assert upload_doc(alice, [], <<"# Plan\n":utf8>>).status == 200
@@ -1423,7 +1423,7 @@ pub fn agents_share_documents_test() {
 
 pub fn public_links_can_be_turned_off_test() {
   let #(ctx, _) =
-    boot_with(48_314, fn(cfg) {
+    boot_with(28_314, fn(cfg) {
       config.Config(..cfg, documents: config.Documents(public_links: False))
     })
   let agent = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))

@@ -1,7 +1,7 @@
 //// End-to-end: comments and answers from the board, and acknowledged
-//// delivery to agents (§17). A module of its own, run after the other
-//// end-to-end tests: its many client connections take ephemeral ports,
-//// which could collide with the fixed ports later tests listen on.
+//// delivery to agents (§17). The end-to-end tests listen on fixed ports
+//// below Linux's ephemeral range (32768–60999), so the many client
+//// connections they make can't take a port a later test listens on.
 
 import e2e_test.{
   base, boot, call, is_error, rpc, send, structured, tool_text, user_with_link,
@@ -18,7 +18,7 @@ import gleam/uri
 import huddy/sys
 
 pub fn comments_flow_test() {
-  let #(ctx, _) = boot(48_309)
+  let #(ctx, _) = boot(28_309)
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = web_session(ctx, "bob@acme.dev")
   let form = fn(path: String, body: String, origin: String) {
@@ -179,7 +179,7 @@ pub fn comments_flow_test() {
 }
 
 pub fn comment_cap_and_shared_goals_test() {
-  let #(ctx, _) = boot(48_310)
+  let #(ctx, _) = boot(28_310)
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = user_with_link(ctx, "bob@acme.dev", Some(#("claude-code", "api")))
   let carol = web_session(ctx, "carol@acme.dev")
@@ -249,7 +249,7 @@ pub fn comment_cap_and_shared_goals_test() {
 }
 
 pub fn comments_cannot_forge_inbox_lines_test() {
-  let #(ctx, _) = boot(48_316)
+  let #(ctx, _) = boot(28_316)
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = web_session(ctx, "bob@acme.dev")
   let task =
@@ -295,7 +295,7 @@ pub fn comments_cannot_forge_inbox_lines_test() {
 }
 
 pub fn tasks_show_under_their_goals_test() {
-  let #(ctx, _) = boot(48_317)
+  let #(ctx, _) = boot(28_317)
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = web_session(ctx, "bob@acme.dev")
   let post = fn(kind: String, title: String) {
@@ -354,7 +354,7 @@ pub fn tasks_show_under_their_goals_test() {
 }
 
 pub fn wait_returns_when_an_answer_arrives_test() {
-  let #(ctx, _) = boot(48_318)
+  let #(ctx, _) = boot(28_318)
   let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
   let bob = web_session(ctx, "bob@acme.dev")
   let answer = fn(n: String, body: String) {
@@ -424,6 +424,76 @@ pub fn wait_returns_when_an_answer_arrives_test() {
   assert took < 1000
   assert string.contains(text, "💬 c2 on " <> decision)
   assert string.contains(text, "Something arrived")
+}
+
+pub fn wait_shows_news_past_the_cap_test() {
+  let #(ctx, _) = boot(28_319)
+  let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let bob = web_session(ctx, "bob@acme.dev")
+  let task =
+    rpc(
+      alice,
+      [],
+      call(
+        "huddy_post",
+        json.object([
+          #("kind", json.string("task")),
+          #("title", json.string("Rotate refresh tokens")),
+        ]),
+      ),
+    )
+    |> structured(["result", "id"])
+  let comment = fn(body: String) {
+    let resp =
+      send(
+        http.Post,
+        base(ctx) <> "/items/" <> string.drop_start(task, 1) <> "/comment",
+        [
+          #("cookie", bob),
+          #("origin", base(ctx)),
+          #("content-type", "application/x-www-form-urlencoded"),
+          #("x-huddy-fetch", "1"),
+        ],
+        "body=" <> body,
+      )
+    assert resp.status == 204
+  }
+  let wait = fn(seconds: Int) {
+    let started = sys.now_ms()
+    let text =
+      rpc(
+        alice,
+        [],
+        call("huddy_wait", json.object([#("timeout_s", json.int(seconds))])),
+      )
+      |> tool_text
+    #(text, sys.now_ms() - started)
+  }
+  // ten comments the agent has been sent but hasn't acknowledged
+  list.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], fn(n) {
+    comment("note+" <> int.to_string(n))
+  })
+  let #(text, _) = wait(1)
+  assert string.contains(text, "💬 c10 ")
+  // an eleventh sorts last, past the cap of ten, but is news: it goes out
+  comment("note+11")
+  let #(text, took) = wait(4)
+  assert took < 1000
+  assert string.contains(text, "💬 c11 on " <> task)
+  assert string.contains(text, "+1 more: call huddy_inbox.")
+  assert string.contains(text, "Something arrived")
+  // and once it has, waiting waits again
+  let #(text, took) = wait(1)
+  assert took >= 1000
+  assert string.contains(text, "Nothing new after 1 s.")
+  // a timeout_s that is no number is refused
+  let bad =
+    rpc(
+      alice,
+      [],
+      call("huddy_wait", json.object([#("timeout_s", json.string("soon"))])),
+    )
+  assert is_error(bad)
 }
 
 fn result_or(r: Result(a, Nil), default: a) -> a {
