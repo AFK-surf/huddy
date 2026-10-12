@@ -1159,6 +1159,7 @@ pub fn create_link(
       scope:,
       created_at: now,
       last_used_at: None,
+      last_used_ip: None,
       revoked_at: None,
     )
   let state = State(..state, mcp_links: dict.insert(state.mcp_links, id, link))
@@ -1176,7 +1177,8 @@ pub fn link_by_secret(state: State, secret_sha256: String) -> Option(McpLink) {
   |> option.from_result
 }
 
-pub fn touch_link(state: State, link_id: Int, now: Int) -> State {
+/// Record a use of a link: when, and from which client address.
+pub fn touch_link(state: State, link_id: Int, now: Int, ip: String) -> State {
   case dict.get(state.mcp_links, link_id) {
     Ok(l) ->
       State(
@@ -1184,7 +1186,7 @@ pub fn touch_link(state: State, link_id: Int, now: Int) -> State {
         mcp_links: dict.insert(
           state.mcp_links,
           link_id,
-          McpLink(..l, last_used_at: Some(now)),
+          McpLink(..l, last_used_at: Some(now), last_used_ip: Some(ip)),
         ),
       )
     Error(_) -> state
@@ -1265,6 +1267,7 @@ pub fn ensure_grant(
           scope:,
           created_at: now,
           last_used_at: None,
+          last_used_ip: None,
           revoked_at: None,
         )
       let state =
@@ -1345,7 +1348,8 @@ pub fn delete_token(state: State, token_sha256: String) -> State {
   State(..state, oauth_tokens: dict.delete(state.oauth_tokens, token_sha256))
 }
 
-pub fn touch_grant(state: State, grant_id: Int, now: Int) -> State {
+/// Record a use of a grant: when, and from which client address.
+pub fn touch_grant(state: State, grant_id: Int, now: Int, ip: String) -> State {
   case dict.get(state.oauth_grants, grant_id) {
     Ok(g) ->
       State(
@@ -1353,7 +1357,7 @@ pub fn touch_grant(state: State, grant_id: Int, now: Int) -> State {
         oauth_grants: dict.insert(
           state.oauth_grants,
           grant_id,
-          OAuthGrant(..g, last_used_at: Some(now)),
+          OAuthGrant(..g, last_used_at: Some(now), last_used_ip: Some(ip)),
         ),
       )
     Error(_) -> state

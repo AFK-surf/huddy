@@ -53,7 +53,8 @@ docker run -p 8080:8080 \
 To keep the state in S3 instead of a volume, see [State in S3](#state-in-s3).
 
 Put Huddy behind a TLS-terminating reverse proxy. List the proxy in
-`server.trusted_proxies` so rate limits see real client IPs, and have the proxy
+`server.trusted_proxies` so rate limits and the last-use IP recorded for MCP
+clients see real client IPs (taken from `X-Forwarded-For`), and have the proxy
 redact `/mcp/k/…` paths from its access logs (they contain secrets). The state
 volume must be a local POSIX filesystem (or use S3).
 

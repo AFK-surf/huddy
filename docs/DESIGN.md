@@ -474,7 +474,8 @@ mutation:
   "mcp_links": [
     { "id": 8, "user": 3, "secret_sha256": "c41a…", "label": "laptop codex",
       "pinned_name": "codex", "pinned_project": null, "scope": "huddy:read huddy:write",
-      "created_at": 1791000000000, "last_used_at": 1791622790000, "revoked_at": null }
+      "created_at": 1791000000000, "last_used_at": 1791622790000,
+      "last_used_ip": "203.0.113.7", "revoked_at": null }
   ],
   "documents": [
     { "id": 3, "agent": 12, "title": "Token rotation design",
@@ -491,7 +492,7 @@ mutation:
     "grants": [
       { "id": 21, "client_id": "https://claude.ai/oauth/mcp-client.json", "user": 3,
         "scope": "huddy:read huddy:write", "created_at": 1791500000000,
-        "last_used_at": 1791622000000, "revoked_at": null }
+        "last_used_at": 1791622000000, "last_used_ip": "203.0.113.7", "revoked_at": null }
     ],
     "tokens": [
       { "token_sha256": "77e0…", "grant": 21, "kind": "refresh", "family": "f-91c2",
@@ -1002,7 +1003,8 @@ Interactions are plain `<form method=post>`. A ~40-line script upgrades them to
   access tokens in query strings, and secret paths are what people expect to
   paste into `.mcp.json`. Huddy writes no per-request access log; a reverse
   proxy in front of it should redact everything after `/mcp/k/`.
-- `last_used_at` is shown, links can be revoked, and access dies with the owning
+- `last_used_at` and `last_used_ip` (the client address, unmasked, resolved
+  through `X-Forwarded-For` from trusted proxies) are shown, links can be revoked, and access dies with the owning
   user's allowlist membership.
 - Trade-off: anyone holding the URL is that user, and URLs leak into shell
   history and dotfiles. That's why scopes and pinning exist, and why the
@@ -1133,7 +1135,8 @@ both live in S3 (5.7). The volume must be a local POSIX filesystem: the atomic
 rename assumes it, and network filesystems don't reliably provide it. Run
 exactly one instance per state file; Huddy does not detect a second one.
 TLS terminates at a reverse proxy, and `trusted_proxies` makes client IPs
-correct for rate limits.
+correct for rate limits and for the last-use address recorded on MCP links and
+OAuth grants.
 
 ---
 

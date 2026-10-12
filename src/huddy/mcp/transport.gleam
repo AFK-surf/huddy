@@ -139,6 +139,11 @@ fn header(req: Request(a), name: String) -> Option(String) {
   request.get_header(req, name) |> option.from_result
 }
 
+/// The client address resolved by the router (X-Forwarded-For aware).
+fn client_ip(req: Request(a)) -> String {
+  header(req, "x-huddy-client-ip") |> option.unwrap("unknown")
+}
+
 /// Decode the `=?base64?…?=` sentinel used in Mcp-Name headers.
 fn decode_header_value(value: String) -> String {
   case string.starts_with(value, "=?base64?") && string.ends_with(value, "?=") {
@@ -202,7 +207,12 @@ fn authenticate(
           case config.email_allowed(ctx.config, user.email) {
             True -> {
               store.update_lazy(ctx.store, fn(s, e, now) {
-                store.Changed(state.touch_link(s, link.id, now), e, [], Nil)
+                store.Changed(
+                  state.touch_link(s, link.id, now, client_ip(req)),
+                  e,
+                  [],
+                  Nil,
+                )
               })
               Ok(Principal(user:, scope: link.scope, link: Some(link)))
             }
@@ -218,7 +228,9 @@ fn authenticate(
             Ok(#(scheme, token)) ->
               case string.lowercase(scheme) == "bearer" {
                 True ->
-                  case oauth.authenticate(ctx, string.trim(token)) {
+                  case
+                    oauth.authenticate(ctx, string.trim(token), client_ip(req))
+                  {
                     Some(#(user, scope, _)) ->
                       Ok(Principal(user:, scope:, link: None))
                     None ->
