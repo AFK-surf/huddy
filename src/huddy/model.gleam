@@ -106,7 +106,16 @@ pub type Document {
     version: Int,
     created_at: Int,
     updated_at: Int,
+    /// shared publicly: anyone with the link can read the current version
+    public: Option(PublicLink),
   )
+}
+
+/// A document's public link. The link's token is derived from `nonce` and
+/// the server's secret key (see `documents.public_token`), so the state file
+/// alone does not reveal it, and rotating the key revokes every link.
+pub type PublicLink {
+  PublicLink(nonce: String, by: Int, at: Int)
 }
 
 pub type DocFile {

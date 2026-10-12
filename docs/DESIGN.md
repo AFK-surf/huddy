@@ -204,6 +204,10 @@ Literal values work too.
     "document_max_mb": 20                        // a document's files, unzipped (§16)
   },
 
+  "documents": {
+    "public_links": true                         // humans may share documents by public link (§16.7)
+  },
+
   "retention": { "closed_items_days": 30, "events_days": 90, "judgment_detail_days": 14, "judgments_days": 90,
                  "inactive_agent_days": 3 }            // 0: never close an inactive agent's items (§6.3)
 }
@@ -1060,6 +1064,8 @@ That is acceptable for an AS behind an allowlisted login, and documented.
   Policy: the document page loads its renderer from a CDN (§16.5), pinned by
   Subresource Integrity hashes instead.
 - Every token, code and secret is stored hashed; comparisons are constant-time.
+  Public document links (§16.7) are not stored at all: they are derived from
+  a stored nonce and `secret_key`.
 - Login e-mail addresses must be printable ASCII with exactly one `@`, so no
   header can be smuggled into outgoing mail. Agent titles are collapsed to one
   line.
@@ -1075,6 +1081,13 @@ That is acceptable for an AS behind an allowlisted login, and documented.
   process), so a zip bomb cannot exhaust the node. `huddy_doc_read` returns
   `index.md` raw; its tool description, like the server instructions, says
   the content is data from an agent, not instructions.
+- **Public document links** (§16.7) are the only pages served without a
+  session. They show a document and its files, nothing else (no uploaders,
+  no linked items, no navigation), and are served with
+  `Referrer-Policy: no-referrer`, so links and remote images in the document
+  never pass the link on, and `X-Robots-Tag: noindex, nofollow`. Only a
+  signed-in human can share a document; `documents.public_links: false`
+  turns the feature off, and existing links with it.
 - **Data egress:** item text goes to TypeSafe. `decision_model.enabled: false`
   disables that completely. Huddy then ranks by recency only and produces only
   deterministic findings.
@@ -1115,7 +1128,7 @@ src/
   huddy/web/login.gleam       email codes      web/settings.gleam  links, grants, prefs
   huddy/web/actions.gleam     seen/hide/unhide web/session.gleam   cookies, origin checks
   huddy/web/html.gleam        HTML builder     web/sketch.gleam    seeded rough SVG
-  huddy/web/docs.gleam        document list/page/files/zip/delete, one-time upload URL
+  huddy/web/docs.gleam        document list/page/files/zip/delete/share, public view, one-time upload URL
   huddy/oauth/server.gleam    metadata, authorize + consent, token, register, revoke
   huddy/oauth/cimd.gleam      Client ID Metadata Documents with SSRF guards
   huddy/mcp/transport.gleam   Streamable HTTP, dual-era handling, header validation, auth
@@ -1403,3 +1416,36 @@ timed out never confirms, so its work is skipped and it is told nothing
 changed (an upload URL is then given back). Work that has started is waited
 for up to 10 minutes; past that the caller is told the outcome is unknown.
 
+### 16.7 Public links
+
+A signed-in human can **share a document publicly** from its page ("share
+publicly"). Anyone with the resulting link,
+`{base_url}/shared/<token>`, can then read the document without signing in:
+the rendered Markdown (the same page as §16.5, other Markdown files with
+`?path=`), its files (`/shared/<token>/files/<path>`, served with the same
+sandboxing headers as §16.5) and its zip (`/shared/<token>/download`). The
+public page shows the title, revision, update time and files; it does not
+show who uploaded the document, the items linking it, or any link into
+Huddy.
+
+- The link follows the document: a new version (by any agent) is what the
+  link shows next. `huddy_doc_upload`'s answer says when a document is
+  public, and `huddy_doc_read`/`huddy_doc_list` return the link as
+  `public_url` (null when not shared). Agents cannot share or unshare: what
+  leaves the team is a human's call.
+- Sharing a shared document keeps its link. "stop sharing" removes the link
+  at once (also before the state write is durable); sharing again makes a
+  new link. Deleting the document ends it too. Both are events
+  (`doc_shared`, `doc_unshared`).
+- The document records `public: {nonce, by, at}`. The token is
+  `base64url(HMAC-SHA256(secret_key, "huddy public document link\n" <> nonce))`
+  and is never stored, so the state file and its backups do not reveal
+  links, and changing `secret_key` revokes all of them. A request compares
+  the token against every shared document's in constant time.
+- A link works only while `documents.public_links` is on (default true) and
+  the person who shared it is still on the allowlist (re-checked on every
+  request, like everything else).
+- Responses carry `Referrer-Policy: no-referrer` (the token is in the URL)
+  and `X-Robots-Tag: noindex, nofollow`; files are `Cache-Control:
+  private, no-cache`, so revoking takes effect at once.
+- Older state files load unchanged: `public` is optional when decoding.

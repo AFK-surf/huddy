@@ -1,7 +1,8 @@
 //// Documents on the web: the list, one document (its Markdown is rendered in
 //// the browser by `priv/static/huddy-doc.js`), its raw files, a zip
-//// download, deletion by a human, and the one-time upload URL agents get
-//// from `huddy_doc_upload`.
+//// download, deletion and public sharing by a human, the public view behind
+//// a document's public link, and the one-time upload URL agents get from
+//// `huddy_doc_upload`.
 
 import gleam/bit_array
 import gleam/bytes_tree
@@ -43,13 +44,75 @@ pub fn handle(
   let rest = list.map(rest, fn(s) { uri.percent_decode(s) |> result.unwrap(s) })
   case rest, req.method {
     [], http.Get -> list_page(ctx, req, user)
-    [ref], http.Get -> with_doc(ctx, ref, show(ctx, req, user, _))
+    [ref], http.Get -> with_doc(ctx, ref, show(ctx, req, Member, _))
     [ref, "files", ..path], http.Get ->
-      with_doc(ctx, ref, file(ctx, _, string.join(path, "/")))
+      with_doc(ctx, ref, file(ctx, _, string.join(path, "/"), Member))
     [ref, "download"], http.Get -> with_doc(ctx, ref, download(ctx, _))
     [ref, "delete"], http.Post -> delete(ctx, req, user, ref)
+    [ref, "share"], http.Post -> share(ctx, req, user, ref, True)
+    [ref, "unshare"], http.Post -> share(ctx, req, user, ref, False)
     _, _ -> wisp.not_found()
   }
+}
+
+/// `/shared/<token>…`: a document shared publicly, for anyone with the link,
+/// without signing in. Only the document is shown: not who uploaded it, nor
+/// the items that link it.
+pub fn handle_public(
+  ctx: Ctx,
+  req: wisp.Request,
+  rest: List(String),
+) -> wisp.Response {
+  let rest = list.map(rest, fn(s) { uri.percent_decode(s) |> result.unwrap(s) })
+  case rest, req.method {
+    [token], http.Get ->
+      with_public(ctx, token, show(ctx, req, Public(token), _))
+    [token, "files", ..path], http.Get ->
+      with_public(ctx, token, file(
+        ctx,
+        _,
+        string.join(path, "/"),
+        Public(token),
+      ))
+    [token, "download"], http.Get -> with_public(ctx, token, download(ctx, _))
+    _, _ -> wisp.not_found()
+  }
+  |> public_headers
+}
+
+/// Who is looking at a document page.
+type Viewer {
+  /// a signed-in member of the team, at `/docs/doc3`
+  Member
+  /// anyone with the public link `/shared/<token>`
+  Public(token: String)
+}
+
+/// Where the document's page lives for this viewer; its files are under it.
+fn base(viewer: Viewer, doc: Document) -> String {
+  case viewer {
+    Member -> "/docs/" <> model.doc_ref(doc.id)
+    Public(token) -> "/shared/" <> token
+  }
+}
+
+fn with_public(
+  ctx: Ctx,
+  token: String,
+  next: fn(Document) -> wisp.Response,
+) -> wisp.Response {
+  case documents.find_public(ctx, token) {
+    Some(doc) -> next(doc)
+    None -> layout.respond(404, public_not_found(ctx))
+  }
+}
+
+/// The public link is the secret: never send it on to other sites, and keep
+/// the pages out of search engines.
+fn public_headers(resp: wisp.Response) -> wisp.Response {
+  resp
+  |> wisp.set_header("referrer-policy", "no-referrer")
+  |> wisp.set_header("x-robots-tag", "noindex, nofollow")
 }
 
 fn find(ctx: Ctx, ref: String) -> Option(Document) {
@@ -96,6 +159,18 @@ const dompurify =
   )
 
 fn shell(ctx: Ctx, title: String, scripts: List(Script), body: List(Node)) {
+  page_shell(ctx, title, scripts, True, body)
+}
+
+/// The page around a document; `nav` links the board and the documents,
+/// which only signed-in members can open.
+fn page_shell(
+  ctx: Ctx,
+  title: String,
+  scripts: List(Script),
+  nav: Bool,
+  body: List(Node),
+) {
   html.document(
     title <> " · Huddy",
     list.map(scripts, fn(script) {
@@ -118,14 +193,20 @@ fn shell(ctx: Ctx, title: String, scripts: List(Script), body: List(Node)) {
     }),
     [
       html.div([html.class("page")], [
-        html.el("header", [html.class("mini")], [
-          html.a("/", [html.class("logo")], [html.text("Huddy")]),
-          html.span([html.class("team")], [html.text(ctx.config.team_name)]),
-          html.el("nav", [html.class("links")], [
-            html.a("/", [], [html.text("board")]),
-            html.a("/docs", [], [html.text("documents")]),
-          ]),
-        ]),
+        html.el("header", [html.class("mini")], case nav {
+          True -> [
+            html.a("/", [html.class("logo")], [html.text("Huddy")]),
+            html.span([html.class("team")], [html.text(ctx.config.team_name)]),
+            html.el("nav", [html.class("links")], [
+              html.a("/", [], [html.text("board")]),
+              html.a("/docs", [], [html.text("documents")]),
+            ]),
+          ]
+          False -> [
+            html.span([html.class("logo")], [html.text("Huddy")]),
+            html.span([html.class("team")], [html.text(ctx.config.team_name)]),
+          ]
+        }),
         html.fragment(body),
       ]),
     ],
@@ -138,6 +219,17 @@ fn not_found(ctx: Ctx) -> String {
     html.el("p", [], [
       html.text("It may have been deleted. "),
       html.a("/docs", [], [html.text("All documents")]),
+    ]),
+  ])
+}
+
+fn public_not_found(ctx: Ctx) -> String {
+  page_shell(ctx, "No such document", [], False, [
+    html.el("h1", [], [html.text("No such document")]),
+    html.el("p", [], [
+      html.text(
+        "This link does not work: the document may no longer be shared, or have been deleted.",
+      ),
     ]),
   ])
 }
@@ -240,38 +332,37 @@ fn list_page(ctx: Ctx, req: wisp.Request, _user: User) -> wisp.Response {
 fn show(
   ctx: Ctx,
   req: wisp.Request,
-  _user: User,
+  viewer: Viewer,
   doc: Document,
 ) -> wisp.Response {
   let now = sys.now_ms()
   let ref = model.doc_ref(doc.id)
+  let base = base(viewer, doc)
+  let nav = viewer == Member
+  let query = wisp.get_query(req)
   let path =
-    list.key_find(wisp.get_query(req), "path")
+    list.key_find(query, "path")
     |> result.try(documents.normalize_path)
     |> result.unwrap("index.md")
   let is_markdown =
     string.ends_with(path, ".md") || string.ends_with(path, ".markdown")
-  let #(label, items) =
-    store.read(ctx.store, fn(s, _) {
-      #(
-        state.doc_byline(s, doc),
-        state.items_with_doc(s, doc.id)
-          |> list.map(fn(i) { #(i, state.agent_label(s, i.agent)) }),
-      )
-    })
   let source = case is_markdown {
     True -> documents.read_file(ctx, doc, path)
     False -> Error("enoent")
   }
   case source {
-    Error("enoent") -> layout.respond(404, not_found(ctx))
+    Error("enoent") ->
+      layout.respond(404, case viewer {
+        Member -> not_found(ctx)
+        Public(_) -> public_not_found(ctx)
+      })
     Error(reason) -> {
       wisp.log_error(
         "documents: cannot read " <> ref <> "/" <> path <> ": " <> reason,
       )
       layout.respond(
         500,
-        shell(ctx, doc.title, [], [
+        page_shell(ctx, doc.title, [], nav, [
           html.el("h1", [], [html.text(doc.title)]),
           layout.error(
             "The document's files cannot be read right now: " <> reason,
@@ -282,22 +373,29 @@ fn show(
     Ok(bits) -> {
       let source =
         bit_array.to_string(bits) |> result.unwrap("(not valid UTF-8 text)")
+      let meta = case viewer {
+        Member ->
+          ref
+          <> " · uploaded by "
+          <> store.read(ctx.store, fn(s, _) { state.doc_byline(s, doc) })
+          <> " · "
+        Public(_) -> ""
+      }
       layout.respond(
         200,
-        shell(
+        page_shell(
           ctx,
           doc.title,
           [marked, dompurify, Script("/static/huddy-doc.js", None)],
+          nav,
           [
             html.el("article", [html.class("doc")], [
               html.div([html.class("dochead")], [
                 html.el("h1", [], [html.text(doc.title)]),
                 html.div([html.class("meta")], [
                   html.text(
-                    ref
-                    <> " · uploaded by "
-                    <> label
-                    <> " · revision "
+                    meta
+                    <> "revision "
                     <> int.to_string(doc.version)
                     <> " · updated "
                     <> fmt.ago(now, doc.updated_at)
@@ -309,7 +407,7 @@ fn show(
                 ]),
                 html.when(path != "index.md", fn() {
                   html.div([html.class("crumbs")], [
-                    html.a("/docs/" <> ref, [], [html.text("index.md")]),
+                    html.a(base, [], [html.text("index.md")]),
                     html.text(" / " <> path),
                   ])
                 }),
@@ -321,7 +419,7 @@ fn show(
                 [
                   html.id("doc-src"),
                   html.class("doc-src"),
-                  #("data-base", "/docs/" <> ref),
+                  #("data-base", base),
                   #("data-path", path),
                   #("data-title", doc.title),
                   #(
@@ -336,75 +434,153 @@ fn show(
                 [],
               ),
             ]),
-            html.el("aside", [html.class("docside")], [
-              html.el("h2", [], [html.text("Linked from")]),
-              case items {
-                [] ->
-                  html.el("p", [html.class("muted")], [
-                    html.text("No items link to this document."),
-                  ])
-                _ ->
-                  html.el(
-                    "ul",
-                    [html.class("rows")],
-                    list.map(items, linked_item),
-                  )
-              },
-              html.el("h2", [], [html.text("Files")]),
-              html.el(
-                "ul",
-                [html.class("rows")],
-                list.map(doc.files, fn(f) {
-                  html.el("li", [], [
-                    html.a(file_href(ref, f.path), [], [html.text(f.path)]),
-                    html.span([html.class("muted")], [
-                      html.text(" · " <> documents.size_label(f.size)),
-                    ]),
-                  ])
-                }),
-              ),
-              html.div([html.class("opts")], [
-                html.a("/docs/" <> ref <> "/download", [html.class("btn sk")], [
-                  html.raw(sketch.frame(
-                    ref <> ":zip",
-                    sketch.Rect,
-                    120,
-                    30,
-                    "ink",
-                    None,
-                  )),
-                  html.text("download .zip"),
+            html.el("aside", [html.class("docside")], case viewer {
+              Member -> [
+                linked_from(ctx, doc),
+                files(base, doc),
+                sharing(ctx, query, doc, now),
+                html.div([html.class("opts")], [
+                  download_button(base, ref),
+                  delete_form(doc),
                 ]),
-                html.el("details", [html.class("hide")], [
-                  html.el("summary", [], [html.text("delete")]),
-                  html.post_form(
-                    "/docs/" <> ref <> "/delete",
-                    [],
-                    // the revision shown: a newer one is not deleted unseen
-                    [#("revision", int.to_string(doc.version))],
-                    [
-                      html.el("span", [html.class("muted")], [
-                        html.text(
-                          "Deletes every version for everyone and unlinks it from items. ",
-                        ),
-                      ]),
-                      html.el(
-                        "button",
-                        [html.class("linkish"), #("type", "submit")],
-                        [
-                          html.text("delete " <> ref),
-                        ],
-                      ),
-                    ],
-                  ),
-                ]),
-              ]),
-            ]),
+              ]
+              Public(_) -> [
+                files(base, doc),
+                html.div([html.class("opts")], [download_button(base, ref)]),
+              ]
+            }),
           ],
         ),
       )
     }
   }
+}
+
+fn linked_from(ctx: Ctx, doc: Document) -> Node {
+  let items =
+    store.read(ctx.store, fn(s, _) {
+      state.items_with_doc(s, doc.id)
+      |> list.map(fn(i) { #(i, state.agent_label(s, i.agent)) })
+    })
+  html.fragment([
+    html.el("h2", [], [html.text("Linked from")]),
+    case items {
+      [] ->
+        html.el("p", [html.class("muted")], [
+          html.text("No items link to this document."),
+        ])
+      _ -> html.el("ul", [html.class("rows")], list.map(items, linked_item))
+    },
+  ])
+}
+
+fn files(base: String, doc: Document) -> Node {
+  html.fragment([
+    html.el("h2", [], [html.text("Files")]),
+    html.el(
+      "ul",
+      [html.class("rows")],
+      list.map(doc.files, fn(f) {
+        html.el("li", [], [
+          html.a(file_href(base, f.path), [], [html.text(f.path)]),
+          html.span([html.class("muted")], [
+            html.text(" · " <> documents.size_label(f.size)),
+          ]),
+        ])
+      }),
+    ),
+  ])
+}
+
+/// The public link, and the buttons to share the document or stop sharing it.
+fn sharing(
+  ctx: Ctx,
+  query: List(#(String, String)),
+  doc: Document,
+  now: Int,
+) -> Node {
+  let ref = model.doc_ref(doc.id)
+  let flash = fn(key, text) {
+    html.when(list.key_find(query, key) |> result.is_ok, fn() {
+      layout.notice(text)
+    })
+  }
+  case ctx.config.documents.public_links, doc.public {
+    False, _ -> html.none()
+    True, None ->
+      html.fragment([
+        html.el("h2", [], [html.text("Public link")]),
+        flash("unshared", "Stopped sharing: the public link no longer works."),
+        html.el("p", [html.class("muted")], [
+          html.text("Only the team can read this document."),
+        ]),
+        html.post_form("/docs/" <> ref <> "/share", [html.class("opts")], [], [
+          layout.button("share publicly", [#("type", "submit")]),
+          html.span([html.class("muted")], [
+            html.text(
+              "Anyone with the link can read it, and every later version, without signing in.",
+            ),
+          ]),
+        ]),
+      ])
+    True, Some(link) -> {
+      let #(by, url) = #(
+        store.read(ctx.store, fn(s, _) { state.handle_of(s, link.by) }),
+        documents.public_url(ctx, doc) |> option.unwrap(""),
+      )
+      html.fragment([
+        html.el("h2", [], [html.text("Public link")]),
+        flash("shared", "Shared: anyone with this link can read the document."),
+        html.div([html.class("secret")], [
+          html.el("pre", [html.id("public-link")], [html.text(url)]),
+        ]),
+        html.el("p", [html.class("muted")], [
+          html.text(
+            "Shared by "
+            <> by
+            <> " "
+            <> fmt.ago(now, link.at)
+            <> ". Anyone with the link can read the current version, without signing in.",
+          ),
+        ]),
+        html.post_form("/docs/" <> ref <> "/unshare", [], [], [
+          html.el("button", [html.class("linkish"), #("type", "submit")], [
+            html.text("stop sharing"),
+          ]),
+        ]),
+      ])
+    }
+  }
+}
+
+fn download_button(base: String, ref: String) -> Node {
+  html.a(base <> "/download", [html.class("btn sk")], [
+    html.raw(sketch.frame(ref <> ":zip", sketch.Rect, 120, 30, "ink", None)),
+    html.text("download .zip"),
+  ])
+}
+
+fn delete_form(doc: Document) -> Node {
+  let ref = model.doc_ref(doc.id)
+  html.el("details", [html.class("hide")], [
+    html.el("summary", [], [html.text("delete")]),
+    html.post_form(
+      "/docs/" <> ref <> "/delete",
+      [],
+      // the revision shown: a newer one is not deleted unseen
+      [#("revision", int.to_string(doc.version))],
+      [
+        html.el("span", [html.class("muted")], [
+          html.text(
+            "Deletes every version for everyone and unlinks it from items. ",
+          ),
+        ]),
+        html.el("button", [html.class("linkish"), #("type", "submit")], [
+          html.text("delete " <> ref),
+        ]),
+      ],
+    ),
+  ])
 }
 
 fn linked_item(pair: #(Item, String)) -> Node {
@@ -432,9 +608,8 @@ fn linked_item(pair: #(Item, String)) -> Node {
   ])
 }
 
-fn file_href(ref: String, path: String) -> String {
-  "/docs/"
-  <> ref
+fn file_href(base: String, path: String) -> String {
+  base
   <> "/files/"
   <> string.split(path, "/") |> list.map(uri.percent_encode) |> string.join("/")
 }
@@ -442,7 +617,12 @@ fn file_href(ref: String, path: String) -> String {
 /// A file of the document, served so that nothing in it can run on Huddy's
 /// origin: a sandboxing CSP (which also covers SVG opened directly), no
 /// sniffing, and anything that is not an image or text is a download.
-fn file(ctx: Ctx, doc: Document, path: String) -> wisp.Response {
+fn file(
+  ctx: Ctx,
+  doc: Document,
+  path: String,
+  viewer: Viewer,
+) -> wisp.Response {
   case documents.normalize_path(path) {
     Error(_) -> wisp.not_found()
     Ok(path) ->
@@ -470,7 +650,11 @@ fn file(ctx: Ctx, doc: Document, path: String) -> wisp.Response {
               "content-security-policy",
               "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
             )
-            |> wisp.set_header("cache-control", "private, max-age=300")
+            |> wisp.set_header("cache-control", case viewer {
+              Member -> "private, max-age=300"
+              // revoking the link takes effect at once
+              Public(_) -> "private, no-cache"
+            })
             |> wisp.set_header("referrer-policy", "same-origin")
           case inline {
             True -> resp
@@ -543,6 +727,42 @@ fn delete(
             Ok(_) -> wisp.redirect("/docs?deleted=1")
             Error(reason) -> wisp.bad_request(reason)
           }
+      }
+    }
+  }
+}
+
+/// Share a document publicly (`public` True), or stop sharing it.
+fn share(
+  ctx: Ctx,
+  req: wisp.Request,
+  user: User,
+  ref: String,
+  public: Bool,
+) -> wisp.Response {
+  case
+    session.same_origin(ctx, req),
+    ctx.config.documents.public_links,
+    model.parse_ref(ref, "doc")
+  {
+    False, _, _ -> wisp.bad_request("cross-origin request")
+    _, False, _ | _, _, Error(_) -> wisp.not_found()
+    True, True, Ok(id) -> {
+      let result = case public {
+        True -> documents.share(ctx, id, user.id) |> result.replace(Nil)
+        False -> documents.unshare(ctx, id, user.id)
+      }
+      case result {
+        Ok(_) ->
+          wisp.redirect(
+            "/docs/"
+            <> model.doc_ref(id)
+            <> case public {
+              True -> "?shared=1"
+              False -> "?unshared=1"
+            },
+          )
+        Error(reason) -> wisp.bad_request(reason)
       }
     }
   }

@@ -707,6 +707,7 @@ pub fn put_document(
           version: 1,
           created_at: now,
           updated_at: now,
+          public: None,
         )
       let state =
         State(..state, documents: dict.insert(state.documents, id, doc))
@@ -772,6 +773,66 @@ pub fn delete_document(
       model.doc_ref(id) <> ": " <> doc.title,
     )
   Ok(#(state, doc))
+}
+
+/// Share a document publicly (any human may): anyone with its link can read
+/// the current version, whoever uploads it. Sharing a document that is
+/// already public keeps its link.
+pub fn share_document(
+  state: State,
+  id: Int,
+  user_id: Int,
+  nonce: String,
+  now: Int,
+) -> Result(#(State, Document), String) {
+  case get_document(state, id) {
+    None -> Error("No document " <> model.doc_ref(id) <> ".")
+    Some(Document(public: Some(_), ..) as doc) -> Ok(#(state, doc))
+    Some(doc) -> {
+      let doc =
+        Document(
+          ..doc,
+          public: Some(model.PublicLink(nonce:, by: user_id, at: now)),
+        )
+      let state =
+        State(..state, documents: dict.insert(state.documents, id, doc))
+        |> add_event(
+          now,
+          user_actor(user_id),
+          None,
+          "doc_shared",
+          model.doc_ref(id) <> ": " <> doc.title,
+        )
+      Ok(#(state, doc))
+    }
+  }
+}
+
+/// Stop sharing a document: its public link stops working for good (sharing
+/// it again makes a new link).
+pub fn unshare_document(
+  state: State,
+  id: Int,
+  user_id: Int,
+  now: Int,
+) -> Result(#(State, Document), String) {
+  case get_document(state, id) {
+    None -> Error("No document " <> model.doc_ref(id) <> ".")
+    Some(Document(public: None, ..) as doc) -> Ok(#(state, doc))
+    Some(doc) -> {
+      let doc = Document(..doc, public: None)
+      let state =
+        State(..state, documents: dict.insert(state.documents, id, doc))
+        |> add_event(
+          now,
+          user_actor(user_id),
+          None,
+          "doc_unshared",
+          model.doc_ref(id) <> ": " <> doc.title,
+        )
+      Ok(#(state, doc))
+    }
+  }
 }
 
 pub fn mark_seen(

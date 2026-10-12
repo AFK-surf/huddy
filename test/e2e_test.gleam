@@ -21,6 +21,7 @@ import huddy
 import huddy/blob
 import huddy/config.{type Config}
 import huddy/ctx.{type Ctx}
+import huddy/documents
 import huddy/jev
 import huddy/model
 import huddy/net
@@ -1103,6 +1104,188 @@ pub fn documents_flow_test() {
   // doc2 and doc3 are gone)
   let assert Ok([left]) = blob.list_dir(ctx.config.storage.documents_dir)
   assert string.ends_with(left, ".zip")
+}
+
+pub fn public_sharing_test() {
+  let #(ctx, _) = boot(48_313)
+  let agent = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let png = <<0x89, "PNG":utf8, 13, 10, 26, 10, 1, 2, 3>>
+  let assert Ok(zip) =
+    zip_create([
+      #("index.md", <<"# Plan\n![arch](img/arch.png)":utf8>>),
+      #("img/arch.png", png),
+    ])
+  assert upload_doc(agent, [], zip).status == 200
+  let cookie = web_session(ctx, "carol@acme.dev")
+  let post = fn(path) {
+    send(
+      http.Post,
+      base(ctx) <> path,
+      [
+        #("cookie", cookie),
+        #("origin", base(ctx)),
+        #("content-type", "application/x-www-form-urlencoded"),
+      ],
+      "",
+    )
+  }
+  let public_url = fn() {
+    let resp =
+      rpc(
+        agent,
+        [],
+        call("huddy_doc_read", json.object([#("id", json.string("doc1"))])),
+      )
+    json.parse(
+      resp.body,
+      decode.at(
+        ["result", "structuredContent", "public_url"],
+        decode.optional(decode.string),
+      ),
+    )
+  }
+
+  // not shared: only the team can read it
+  assert public_url() == Ok(None)
+  let page =
+    send(http.Get, base(ctx) <> "/docs/doc1", [#("cookie", cookie)], "")
+  assert string.contains(page.body, "share publicly")
+  // sharing needs a same-origin form post
+  let cross =
+    send(
+      http.Post,
+      base(ctx) <> "/docs/doc1/share",
+      [#("cookie", cookie), #("origin", "https://evil.example")],
+      "",
+    )
+  assert cross.status == 400
+  assert public_url() == Ok(None)
+
+  // a human shares it; the page shows the link, and agents see it
+  let shared = post("/docs/doc1/share")
+  assert shared.status == 303
+  assert header(shared, "location") == "/docs/doc1?shared=1"
+  let assert Ok(Some(url)) = public_url()
+  assert string.starts_with(url, base(ctx) <> "/shared/")
+  let page =
+    send(
+      http.Get,
+      base(ctx) <> "/docs/doc1?shared=1",
+      [#("cookie", cookie)],
+      "",
+    )
+  assert string.contains(page.body, url)
+  assert string.contains(page.body, "stop sharing")
+  // sharing again keeps the same link
+  assert post("/docs/doc1/share").status == 303
+  assert public_url() == Ok(Some(url))
+  // the link's token is not in the state file
+  let token = string.drop_start(url, string.length(base(ctx) <> "/shared/"))
+  let assert Ok(_) = store.flush(ctx.store)
+  let assert Ok(saved) = blob.read(ctx.config.storage.path)
+  let assert Ok(saved) = bit_array.to_string(saved)
+  assert !string.contains(saved, token)
+
+  // anyone with the link reads it, without signing in
+  let page = send(http.Get, url, [], "")
+  assert page.status == 200
+  assert string.contains(page.body, "![arch](img/arch.png)")
+  assert string.contains(page.body, "data-base=\"/shared/" <> token <> "\"")
+  // nothing about the team's agents or items, and no way into the board
+  assert !string.contains(page.body, "alice")
+  assert !string.contains(page.body, "Linked from")
+  assert !string.contains(page.body, "href=\"/docs")
+  assert !string.contains(page.body, "delete")
+  assert header(page, "referrer-policy") == "no-referrer"
+  assert header(page, "x-robots-tag") == "noindex, nofollow"
+  let image = get_bits(url <> "/files/img/arch.png", "")
+  assert image.status == 200
+  assert image.body == png
+  let assert Ok("sandbox" <> _) =
+    response.get_header(image, "content-security-policy")
+  assert response.get_header(image, "referrer-policy") == Ok("no-referrer")
+  assert get_bits(url <> "/files/../../huddy.json", "").status == 404
+  let download = get_bits(url <> "/download", "")
+  assert download.status == 200
+  assert download.body == zip
+  // a wrong token, or the rest of Huddy, is not public
+  assert send(http.Get, base(ctx) <> "/shared/nope", [], "").status == 404
+  assert send(http.Get, base(ctx) <> "/docs/doc1", [], "").status == 303
+
+  // a new version is what the link shows
+  let resp =
+    rpc(
+      agent,
+      [],
+      call(
+        "huddy_doc_upload",
+        json.object([#("id", json.string("doc1")), #("revision", json.int(1))]),
+      ),
+    )
+  let upload = structured(resp, ["result", "upload_url"])
+  let resp = send(http.Post, upload, [], "# Plan v2\n")
+  assert resp.status == 200
+  assert string.contains(resp.body, "It is shared publicly")
+  assert string.contains(send(http.Get, url, [], "").body, "# Plan v2")
+
+  // stopping sharing breaks the link for good
+  let unshared = post("/docs/doc1/unshare")
+  assert unshared.status == 303
+  assert header(unshared, "location") == "/docs/doc1?unshared=1"
+  assert public_url() == Ok(None)
+  assert send(http.Get, url, [], "").status == 404
+  assert get_bits(url <> "/download", "").status == 404
+  assert post("/docs/doc1/share").status == 303
+  let assert Ok(Some(new_url)) = public_url()
+  assert new_url != url
+  assert send(http.Get, new_url, [], "").status == 200
+
+  // deleting the document ends its link too
+  let deleted =
+    send(
+      http.Post,
+      base(ctx) <> "/docs/doc1/delete",
+      [
+        #("cookie", cookie),
+        #("origin", base(ctx)),
+        #("content-type", "application/x-www-form-urlencoded"),
+      ],
+      "revision=2",
+    )
+  assert deleted.status == 303
+  assert send(http.Get, new_url, [], "").status == 404
+}
+
+pub fn public_links_can_be_turned_off_test() {
+  let #(ctx, _) =
+    boot_with(48_314, fn(cfg) {
+      config.Config(..cfg, documents: config.Documents(public_links: False))
+    })
+  let agent = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  assert upload_doc(agent, [], <<"# Plan\n":utf8>>).status == 200
+  let cookie = web_session(ctx, "carol@acme.dev")
+  let page =
+    send(http.Get, base(ctx) <> "/docs/doc1", [#("cookie", cookie)], "")
+  assert !string.contains(page.body, "share publicly")
+  let shared =
+    send(
+      http.Post,
+      base(ctx) <> "/docs/doc1/share",
+      [#("cookie", cookie), #("origin", base(ctx))],
+      "",
+    )
+  assert shared.status == 404
+  // a link shared before they were turned off stops working
+  let assert Ok(_) =
+    store.update(ctx.store, fn(s, e, now) {
+      let assert Ok(#(s, _)) = state.share_document(s, 1, 1, "nonce", now)
+      store.Changed(s, e, [], Nil)
+    })
+  let assert Some(doc) =
+    store.read(ctx.store, fn(s, _) { state.get_document(s, 1) })
+  let assert Some(link) = doc.public
+  let token = documents.public_token(ctx, link)
+  assert send(http.Get, base(ctx) <> "/shared/" <> token, [], "").status == 404
 }
 
 /// Upload a document the only way agents can: ask huddy_doc_upload for a

@@ -134,6 +134,12 @@ and any agent can replace or delete any of them.
   shows the links.
 - `/docs` lists them for humans; `/docs/doc3` renders the Markdown in the
   browser. Humans can delete a document there.
+- Humans can also **share a document publicly** from its page: anyone with
+  the link (`/shared/<token>`) can read the document, and its later
+  versions, without signing in, until someone stops sharing it. Agents see
+  the link as `public_url` but cannot share. Set
+  `"documents": {"public_links": false}` to turn this off. Details:
+  [DESIGN.md §16.7](docs/DESIGN.md#167-public-links).
 
 Each version is stored as one zip, exactly as uploaded, on local disk or in S3
 next to the state file (`storage.documents_dir`); the limit is `limits.document_max_mb` (default 20 MB

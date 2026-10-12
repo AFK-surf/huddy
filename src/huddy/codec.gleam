@@ -13,7 +13,7 @@ import huddy/model.{
   type McpLink, type NextIds, type OAuthClient, type OAuthGrant, type OAuthToken,
   type State, type User, type WebSession, Agent, DocFile, Document, Event,
   Finding, Item, Judgment, McpLink, NextIds, OAuthClient, OAuthGrant, OAuthToken,
-  State, User, WebSession,
+  PublicLink, State, User, WebSession,
 }
 
 pub const format = 1
@@ -200,6 +200,16 @@ pub fn encode_document(d: Document) -> Json {
     #("version", json.int(d.version)),
     #("created_at", json.int(d.created_at)),
     #("updated_at", json.int(d.updated_at)),
+    #(
+      "public",
+      opt(d.public, fn(p) {
+        json.object([
+          #("nonce", json.string(p.nonce)),
+          #("by", json.int(p.by)),
+          #("at", json.int(p.at)),
+        ])
+      }),
+    ),
   ])
 }
 
@@ -530,6 +540,16 @@ pub fn document_decoder() -> Decoder(Document) {
   use version <- decode.field("version", decode.int)
   use created_at <- decode.field("created_at", decode.int)
   use updated_at <- decode.field("updated_at", decode.int)
+  use public <- decode.optional_field(
+    "public",
+    None,
+    decode.optional({
+      use nonce <- decode.field("nonce", decode.string)
+      use by <- decode.field("by", decode.int)
+      use at <- decode.field("at", decode.int)
+      decode.success(PublicLink(nonce:, by:, at:))
+    }),
+  )
   decode.success(Document(
     id:,
     agent:,
@@ -541,6 +561,7 @@ pub fn document_decoder() -> Decoder(Document) {
     version:,
     created_at:,
     updated_at:,
+    public:,
   ))
 }
 
@@ -846,11 +867,20 @@ pub fn check_references(state: State) -> Result(Nil, String) {
           check(dict.has_key(state.agents, d.agent), "document agent", d.agent)
         {
           Ok(_) ->
-            check(
-              dict.has_key(state.agents, d.updated_by),
-              "document updated_by",
-              d.updated_by,
-            )
+            case
+              check(
+                dict.has_key(state.agents, d.updated_by),
+                "document updated_by",
+                d.updated_by,
+              )
+            {
+              Ok(_) ->
+                opt_user(
+                  "document public link",
+                  option.map(d.public, fn(p) { p.by }),
+                )
+              e -> e
+            }
           e -> e
         }
       })

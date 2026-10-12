@@ -254,6 +254,47 @@ pub fn documents_round_trip_through_the_state_file_test() {
   assert string.contains(message, "item document")
 }
 
+pub fn sharing_a_document_publicly_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let assert Ok(#(s, doc, _)) =
+    state.put_document(s, a, new_doc("Spec", None), now)
+  assert doc.public == None
+  // user 1 (alice) shares it
+  let assert Ok(#(s, shared)) = state.share_document(s, doc.id, 1, "n1", now)
+  assert shared.public == Some(model.PublicLink(nonce: "n1", by: 1, at: now))
+  // sharing again keeps the link
+  let assert Ok(#(s, again)) = state.share_document(s, doc.id, 2, "n2", now + 1)
+  assert again.public == shared.public
+  // a new version, by any agent, stays shared
+  let assert Ok(#(s, v2, _)) =
+    state.put_document(s, b, new_doc("Spec v2", Some(at(doc.id, 1))), now)
+  assert v2.public == shared.public
+  // it survives the state file, and its user must exist
+  let assert Ok(loaded) = persist.decode_file(persist.encode(s, now), "test")
+  assert loaded.documents == s.documents
+  assert codec.check_references(s) == Ok(Nil)
+  let broken =
+    model.State(
+      ..s,
+      documents: dict.insert(
+        s.documents,
+        doc.id,
+        model.Document(
+          ..v2,
+          public: Some(model.PublicLink(nonce: "n1", by: 99, at: now)),
+        ),
+      ),
+    )
+  let assert Error(message) = codec.check_references(broken)
+  assert string.contains(message, "document public link")
+  // unsharing drops the link; sharing again makes a new one
+  let assert Ok(#(s, unshared)) = state.unshare_document(s, doc.id, 2, now)
+  assert unshared.public == None
+  let assert Ok(#(_, reshared)) = state.share_document(s, doc.id, 2, "n3", now)
+  assert reshared.public == Some(model.PublicLink(nonce: "n3", by: 2, at: now))
+  assert state.share_document(s, 42, 1, "n", now) == Error("No document doc42.")
+}
+
 pub fn files_written_before_documents_existed_still_load_test() {
   let #(s, _, _) = support.two_agents(now)
   let text =
