@@ -582,14 +582,7 @@ fn goal(g: rank.GoalGroup) -> Node {
   let p = g.primary
   html.div([html.class("goal"), html.id(model.item_ref(p.item.id))], [
     html.div([html.class("bubble sk")], [
-      html.raw(sketch.frame(
-        seed(p),
-        sketch.Rect,
-        320,
-        90,
-        "goal",
-        None,
-      )),
+      html.raw(sketch.frame(seed(p), sketch.Rect, 320, 90, "goal", None)),
       html.text(p.item.title),
       doc_links(p),
     ]),
