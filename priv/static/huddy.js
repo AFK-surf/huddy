@@ -8,14 +8,29 @@
     const form = ev.target;
     if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-fetch")) return;
     ev.preventDefault();
+    // the clicked button's name/value (e.g. a decision option) goes along
+    const data = new FormData(form, ev.submitter || undefined);
     try {
       const res = await fetch(form.action, {
         method: "POST",
-        body: new URLSearchParams(new FormData(form)),
+        body: new URLSearchParams(data),
         headers: { "x-huddy-fetch": "1" },
         credentials: "same-origin",
       });
-      if (!res.ok) form.submit();
+      if (!res.ok) {
+        // show the server's reason (e.g. the item closed meanwhile)
+        if (res.status === 400 || res.status === 429) {
+          alert((await res.text()).replace(/^Bad request: /, "") || "That didn't work.");
+          return;
+        }
+        form.submit();
+        return;
+      }
+      if (form.hasAttribute("data-reset")) {
+        // clear it and close its <details>, so the held-back zone swap lands
+        form.reset();
+        form.closest("details")?.removeAttribute("open");
+      }
     } catch (_) {
       form.submit();
     }

@@ -103,6 +103,24 @@ details.hide summary { cursor: pointer; list-style: none; }
 details.hide summary::-webkit-details-marker { display: none; }
 details.hide form { display: flex; gap: 8px; margin-top: 6px; }
 details.hide input { font: 14px var(--text); padding: 3px 6px; border: 1px solid var(--grid); border-radius: 4px; min-width: 0; }
+details.comment { font-family: var(--hand); font-size: 16px; color: var(--muted); }
+details.comment summary { cursor: pointer; list-style: none; }
+details.comment summary::-webkit-details-marker { display: none; }
+details.comment[open] { flex-basis: 100%; }
+details.comment form { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; width: 100%; max-width: 360px; }
+.task .side details.comment form { width: min(320px, 60vw); }
+details.comment textarea { font: 14px var(--text); padding: 4px 6px; border: 1px solid var(--grid); border-radius: 4px; width: 100%; box-sizing: border-box; resize: vertical; background: var(--paper); color: var(--ink); }
+.picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.pick { font: 15px var(--hand); padding: 2px 10px 3px; background: var(--dec-bg); border: 1.5px solid var(--dec); border-radius: 12px; color: var(--ink); cursor: pointer; }
+.thread { margin: 6px 0 8px; display: flex; flex-direction: column; gap: 3px; }
+.cm { font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; white-space: pre-wrap; border-left: 2px solid var(--grid); padding-left: 8px; }
+.cm b { font-weight: 600; }
+.cm.agent { border-left-color: var(--goal); }
+.cm.agent b { color: var(--goal); }
+.cm .age { color: var(--muted); }
+.cm .receipt { display: block; font-size: 12px; color: var(--muted); }
+.thread details.earlier { font-size: 13px; color: var(--muted); }
+.thread details.earlier summary { cursor: pointer; }
 .hint { font-family: var(--hand); font-size: 17px; color: var(--muted); margin-top: 14px; }
 .more { font-family: var(--hand); font-size: 18px; color: var(--muted); padding: 6px 4px; }
 
@@ -111,6 +129,8 @@ details.hide input { font: 14px var(--text); padding: 3px 6px; border: 1px solid
 .goal .bubble { padding: 14px 18px 16px; font-family: var(--hand); font-size: 20px; line-height: 1.2; flex: 1; min-width: 0; text-align: center; overflow-wrap: anywhere; }
 .goal .who { display: flex; flex-direction: column; gap: 4px; font-family: var(--hand); font-size: 14px; color: var(--muted); flex: none; width: 190px; overflow-wrap: anywhere; }
 .goal .who .away { opacity: .6; }
+.goal { flex-wrap: wrap; }
+.goal > .thread, .goal > details.comment { flex-basis: 100%; margin-top: 0; }
 
 .tasks { display: flex; flex-direction: column; gap: 6px; }
 .task { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 8px 6px; }

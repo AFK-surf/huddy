@@ -141,6 +141,9 @@ pub type Limits {
     writes_per_agent_per_minute: Int,
     /// total size of a document's files, unzipped
     document_max_mb: Int,
+    comment_max_chars: Int,
+    comments_per_item: Int,
+    comments_per_user_per_minute: Int,
   )
 }
 
@@ -265,7 +268,11 @@ pub fn decoder() -> Decoder(Config) {
   use review <- section("review", review_decoder(), default_review())
   use notify <- section("notify", notify_decoder(), Notify(browser: True))
   use display <- section("display", display_decoder(), default_display())
-  use limits <- section("limits", limits_decoder(), Limits(120, 2000, 12, 20))
+  use limits <- section(
+    "limits",
+    limits_decoder(),
+    Limits(120, 2000, 12, 20, 1000, 100, 12),
+  )
   use retention <- section(
     "retention",
     retention_decoder(),
@@ -663,11 +670,17 @@ fn limits_decoder() -> Decoder(Limits) {
   use d <- opt("detail_max_chars", 2000, decode.int)
   use w <- opt("writes_per_agent_per_minute", 12, decode.int)
   use m <- opt("document_max_mb", 20, decode.int)
+  use cm <- opt("comment_max_chars", 1000, decode.int)
+  use ci <- opt("comments_per_item", 100, decode.int)
+  use cu <- opt("comments_per_user_per_minute", 12, decode.int)
   decode.success(Limits(
     title_max_chars: t,
     detail_max_chars: d,
     writes_per_agent_per_minute: w,
     document_max_mb: m,
+    comment_max_chars: cm,
+    comments_per_item: ci,
+    comments_per_user_per_minute: cu,
   ))
 }
 
@@ -733,6 +746,22 @@ fn validate(config: Config) -> Result(Config, String) {
     n if n >= 1 && n <= 1000 -> Ok(Nil)
     _ -> Error("config: limits.document_max_mb must be between 1 and 1000")
   })
+  use _ <- result.try(case config.limits.comment_max_chars {
+    n if n >= 1 && n <= 10_000 -> Ok(Nil)
+    _ -> Error("config: limits.comment_max_chars must be between 1 and 10000")
+  })
+  use _ <- result.try(
+    case
+      config.limits.comments_per_item >= 1,
+      config.limits.comments_per_user_per_minute >= 1
+    {
+      True, True -> Ok(Nil)
+      _, _ ->
+        Error(
+          "config: limits.comments_per_item and limits.comments_per_user_per_minute must be at least 1",
+        )
+    },
+  )
   use _ <- result.try(
     case config.decision_model.enabled, config.decision_model.api_key {
       True, "" ->
