@@ -588,7 +588,7 @@ fn goal(g: rank.GoalGroup) -> Node {
         320,
         90,
         "goal",
-        Some("goal-bg"),
+        None,
       )),
       html.text(p.item.title),
       doc_links(p),
