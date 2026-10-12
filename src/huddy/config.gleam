@@ -103,6 +103,8 @@ pub type Thresholds {
     duplicate: Float,
     overlap: Float,
     stale: Float,
+    /// filing a task under a goal (or under none)
+    goal: Float,
   )
 }
 
@@ -555,6 +557,7 @@ pub fn default_thresholds() -> Thresholds {
     duplicate: 0.75,
     overlap: 0.7,
     stale: 0.6,
+    goal: 0.5,
   )
 }
 
@@ -581,12 +584,14 @@ fn review_decoder() -> Decoder(Review) {
     use duplicate <- opt("duplicate", t.duplicate, number())
     use overlap <- opt("overlap", t.overlap, number())
     use stale <- opt("stale", t.stale, number())
+    use goal <- opt("goal", t.goal, number())
     decode.success(Thresholds(
       unclear:,
       not_a_question:,
       duplicate:,
       overlap:,
       stale:,
+      goal:,
     ))
   })
   use sweep_interval_minutes <- opt(

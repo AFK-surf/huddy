@@ -25,6 +25,22 @@ pub type Context {
     similar: List(#(String, Item)),
     /// ref -> item, the agent's other open items (staleness questions)
     own_open: List(#(String, Item)),
+    /// tasks: ref -> goal, the agent's open goals the task may serve
+    goals: List(#(String, Item)),
+    /// goals: ref -> task, the agent's open tasks not filed under an open
+    /// goal, which may serve this one
+    unfiled: List(#(String, Item)),
+  )
+}
+
+/// Where write-review answers file tasks under goals.
+pub type Filing {
+  Filing(
+    /// tasks: Some(Some(goal)) files it under that goal, Some(None) under
+    /// none; None leaves it as it was (no confident answer)
+    goal: Option(Option(Int)),
+    /// goals: the unfiled tasks that serve it
+    tasks: List(Int),
   )
 }
 
@@ -183,6 +199,50 @@ pub fn write_request(s: State, item: Item, now: Int) -> Request {
       ),
     ]
   }
+  // filing: which goal a task serves, and which unfiled tasks a goal takes
+  let goals = case item.kind {
+    model.Task ->
+      state.open_items_of(s, item.agent)
+      |> list.filter(fn(i) { i.kind == model.Goal })
+      |> list.take(8)
+    _ -> []
+  }
+  let goal_q = case goals {
+    [] -> []
+    _ -> [
+      #(
+        "goal",
+        jev.Choice(
+          "new_item is one of the agent's tasks. Which of the agent's goals is it a step towards?",
+          list.append(list.map(goals, fn(g) { #(ref(g), g.title) }), [
+            #("none", "None of them: the task is separate work"),
+          ]),
+        ),
+      ),
+    ]
+  }
+  let unfiled = case item.kind {
+    model.Goal ->
+      state.unfiled_tasks(s, item.agent)
+      |> list.filter(fn(i) { i.id != item.id })
+      |> list.take(6)
+    _ -> []
+  }
+  let serves_q =
+    list.map(unfiled, fn(t) {
+      #(
+        "serves_" <> ref(t),
+        jev.Noul(
+          "new_item is a goal the agent has set. Is the agent's task "
+            <> ref(t)
+            <> " (\""
+            <> t.title
+            <> "\") a step towards new_item?",
+          "The task is part of the work towards new_item's end state",
+          "The task is unrelated to new_item, or serves a different outcome",
+        ),
+      )
+    })
   let stale_q =
     list.map(own_open, fn(i) {
       #(
@@ -196,12 +256,21 @@ pub fn write_request(s: State, item: Item, now: Int) -> Request {
     })
   Request(
     state: state_json,
-    questions: list.flatten([base, decision_q, same_q, stale_q]),
+    questions: list.flatten([
+      base,
+      decision_q,
+      same_q,
+      stale_q,
+      goal_q,
+      serves_q,
+    ]),
     context: Context(
       item:,
       agent_label: label,
       similar: list.map(similar_items, fn(i) { #(ref(i), i) }),
       own_open: list.map(own_open, fn(i) { #(ref(i), i) }),
+      goals: list.map(goals, fn(i) { #(ref(i), i) }),
+      unfiled: list.map(unfiled, fn(i) { #(ref(i), i) }),
     ),
   )
 }
@@ -371,6 +440,36 @@ pub fn interpret_write(
       stale_findings,
     ]),
   )
+}
+
+/// Turn write-review answers into where tasks are filed: under which goal
+/// a task goes, and which unfiled tasks a goal takes. Answers below the
+/// `goal` threshold change nothing.
+pub fn interpret_filing(
+  ctx: Context,
+  answers: Dict(String, Answer),
+  t: Thresholds,
+) -> Filing {
+  let goal = case dict.get(answers, "goal") {
+    Ok(jev.ChoiceAnswer(choice:, ..) as answer) ->
+      case choice_p(answer) >=. t.goal, choice {
+        False, _ -> None
+        True, "none" -> Some(None)
+        True, r ->
+          list.key_find(ctx.goals, r)
+          |> result.map(fn(g) { Some(Some(g.id)) })
+          |> result.unwrap(None)
+      }
+    _ -> None
+  }
+  let tasks =
+    list.filter_map(ctx.unfiled, fn(pair) {
+      case dict.get(answers, "serves_" <> pair.0) {
+        Ok(jev.NoulAnswer(p)) if p >=. t.goal -> Ok({ pair.1 }.id)
+        _ -> Error(Nil)
+      }
+    })
+  Filing(goal:, tasks:)
 }
 
 // --- sweep -----------------------------------------------------------------------

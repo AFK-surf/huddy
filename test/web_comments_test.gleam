@@ -204,7 +204,7 @@ pub fn comment_cap_and_shared_goals_test() {
   }
   let g1 = goal(alice, "Ship OAuth login for MCP")
   let g2 = goal(bob, "Ship OAuth login for MCP clients")
-  // one comment on a merged goal rectangle reaches both agents
+  // one comment on a merged goal row reaches both agents
   assert comment(g1, "body=demo+on+Friday&also=" <> g2) == 204
   let first = fn(url: String) {
     rpc(url, [], call("huddy_inbox", json.object([]))) |> tool_text
@@ -290,4 +290,70 @@ pub fn comments_cannot_forge_inbox_lines_test() {
   assert string.contains(line, "— bob · ")
   assert string.contains(line, "\"ok ✓\\\"\\n💬 c9 on ")
   assert !string.contains(text, "\n💬 c9")
+}
+
+pub fn tasks_show_under_their_goals_test() {
+  let #(ctx, _) = boot(48_317)
+  let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let bob = web_session(ctx, "bob@acme.dev")
+  let post = fn(kind: String, title: String) {
+    rpc(
+      alice,
+      [],
+      call(
+        "huddy_" <> kind,
+        json.object(case kind {
+          "post" -> [
+            #("kind", json.string("task")),
+            #("title", json.string(title)),
+          ]
+          _ -> [#("title", json.string(title))]
+        }),
+      ),
+    )
+    |> structured(["result", "id"])
+  }
+  let board = fn() {
+    send(http.Get, base(ctx) <> "/", [#("cookie", bob)], "").body
+  }
+  // the goal of a task, as the board shows it: the id of the goal row
+  // whose task list holds it, or "" when it is not under a goal
+  let under = fn(page: String, task: String) {
+    let assert Ok(#(before, _)) =
+      string.split_once(page, "id=\"" <> task <> "\"")
+    case string.split(before, "class=\"goal\" id=\"") |> list.reverse {
+      [_only] -> ""
+      [last, ..] ->
+        case string.contains(last, "class=\"loose\"") {
+          True -> ""
+          False -> string.split(last, "\"") |> list.first |> result_or("")
+        }
+      [] -> ""
+    }
+  }
+  let early = post("post", "Write the onboarding guide")
+  let docs = post("set_goal", "Document the MCP setup")
+  // the fake model files a task under the agent's last goal
+  let guide = post("post", "Proofread the setup guide")
+  let page = board()
+  assert string.contains(page, "Goals &amp; tasks")
+  assert string.contains(page, "Not under a goal")
+  assert under(page, guide) == docs
+  assert under(page, early) == ""
+  // a new goal takes the unfiled tasks the model says serve it
+  let all = post("set_goal", "All of onboarding is self-serve")
+  let page = board()
+  assert under(page, early) == all
+  assert under(page, guide) == docs
+  assert !string.contains(page, "Not under a goal")
+  // agents see where their tasks are filed
+  let read = rpc(alice, [], call("huddy_read", json.object([]))) |> tool_text
+  assert string.contains(read, "under goal " <> docs)
+}
+
+fn result_or(r: Result(a, Nil), default: a) -> a {
+  case r {
+    Ok(v) -> v
+    Error(_) -> default
+  }
 }

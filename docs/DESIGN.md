@@ -15,7 +15,7 @@ statements:
 
 | Category | Meaning | Shape | Color (Excalidraw palette) |
 |---|---|---|---|
-| **Goal** | An end state an agent is heading towards. **Any number per agent.** Drawn as a rectangle on the board. | ● circle | blue `#1971c2` / fill `#a5d8ff` |
+| **Goal** | An end state an agent is heading towards. **Any number per agent.** Drawn on the board as a row of blue text, with its tasks listed under it. | ● circle | blue `#1971c2` / fill `#a5d8ff` |
 | **Task** | Concrete work the agent is doing now. | ▲ triangle | green `#2f9e44` / fill `#b2f2bb` |
 | **Decision** | Something the agent is unsure about and wants a human to look at. | ◆ diamond (filled = **blocking**, hollow = non-blocking) | orange `#f08c00` / fill `#ffec99` |
 
@@ -176,7 +176,8 @@ Literal values work too.
       "not_a_question": 0.40,                    // decisions: P(answerable) below this
       "duplicate": 0.75,                         // same agent
       "overlap": 0.70,                           // another agent
-      "stale": 0.60
+      "stale": 0.60,
+      "goal": 0.50                               // filing a task under a goal (or under none)
     },
     "sweep_interval_minutes": 15,
     "sweep_idle_hours": 2,                       // re-review agents whose newest update is older than this
@@ -262,6 +263,7 @@ One table holds all three categories.
 | `importance` | Jev score, 0–3 (nullable until reviewed) |
 | `stale_p` | latest staleness probability (cached from the open `stale` finding) |
 | `overlaps` | link to another agent's item (cached from the open `overlap` finding) |
+| `goal` | tasks: the agent's goal the task serves, filed by the decision model (§6.2); null when it serves none |
 | `seen_by`, `seen_at` | decisions: a human clicked "seen" |
 | `hidden_by`, `hidden_note` | a human hid it from the display |
 
@@ -662,6 +664,24 @@ included. Decision items add one more question,
 `answerable` (noul): *"new_item asks a concrete question that a human could
 answer with a choice or a short reply."*
 
+**Filing tasks under goals.** The same request files tasks under the goal they
+serve, so the board can list each goal's tasks under it (§9.2):
+- A **task** with at least one open goal from its agent adds `goal` (choice):
+  *"new_item is one of the agent's tasks. Which of the agent's goals is it a
+  step towards?"*, with one option per open goal (ref → title, up to 8) and
+  `none`.
+- A **goal** adds `serves_iNN` (noul) for each of its agent's open tasks that
+  are not filed under an open goal (up to 6): *"Is the agent's task iNN a step
+  towards new_item?"* This picks up tasks posted before the goal, and tasks
+  whose goal was achieved or abandoned.
+
+Until the model has answered, a new task is filed under its agent's goal when
+the agent has exactly one, and none otherwise. A goal set with `replaces`
+takes over the replaced goal's open tasks. Filing is Huddy's classification,
+not the agent's words: it doesn't bump the item's version or trigger a
+re-review. Agents see it as `goal` in `huddy_read` (and "under goal iNN" in its
+text).
+
 **Interpretation (deterministic):**
 
 | Answer | Rule | Finding |
@@ -672,6 +692,8 @@ answer with a choice or a short reply."*
 | `same_as` | another agent's item, confidence ≥ `overlap` | `overlap` to both agents; sets `overlaps` |
 | `stale_iNN` | P(`finished`) + P(`superseded`) ≥ `stale` | `stale` on iNN; sets `stale_p` |
 | `importance` | always | none; stored for ranking (0–3) |
+| `goal` (tasks) | chosen option's P ≥ `goal` | none; files the task under that goal, or under none |
+| `serves_iNN` (goals) | P ≥ `goal`, and iNN is still unfiled | none; files iNN under the new goal |
 
 Every finding is advice. The response is never `isError` because of a review.
 LLM agents respond well to concrete, named feedback, so most findings get acted
@@ -877,9 +899,12 @@ goal.priority      = max priority of the agent's open items, + 0.2 if active in 
 3. **Hysteresis.** A hidden item replaces a visible one only if it beats it by
    0.05, so the display doesn't flicker as scores move.
 4. Ties break by `updated_at` (newer first).
-5. Goals: any number per agent, each drawn as a rectangle. Goals linked by an
-   open `overlap` (two agents, same goal) render as **one rectangle with
-   several agent chips**.
+5. Goals: any number per agent, each drawn as a row of blue text with the
+   shown tasks filed under it (§6.2) listed beneath; shown tasks not under a
+   shown goal are listed after the goals, under "Not under a goal". Tasks are
+   still selected by rule 2, so a goal can have more tasks than it shows.
+   Goals linked by an open `overlap` (two agents, same goal) render as **one row naming
+   several agents**, with the tasks of all of them.
 6. Items hidden by a human are left out. The footer links to `?expand=hidden`,
    which lists them with an un-hide button.
 7. **Away agents are left out by default**, with their goals, tasks and
@@ -931,11 +956,15 @@ covers the per-agent view.
 │  │ seen by bob · 1h      [hide]  │ │ [seen] [hide]          │ │ [hide]                    ││
 │  └───────────────────────────────┘ └────────────────────────┘ └───────────────────────────┘│
 │                                                                                           │
-│ ● GOALS                                   ▲ TASKS                                         │
-│  (Ship OAuth login for MCP)  alice/codex   ▲ Write refresh-token rotation · alice/codex   │
-│  (Deprecate /v1 API)         bob/claude    ▲ Deflake auth tests ≈ overlaps bob/claude     │
-│  (Redesign settings page)    carol/codex   ▲ Port settings to new layout (faded: stale?)  │
-│   …                                         +7 more                                       │
+│ ● GOALS & TASKS  5 of 12 open tasks                                                       │
+│  Ship OAuth login for MCP  alice/codex/huddy                          (blue text, no box)│
+│     ▲ Write refresh-token rotation                                              2h ago   │
+│     ▲ Deflake auth tests  ≈ overlaps bob/claude-code/api                        3h ago   │
+│  Deprecate /v1 API  bob/claude-code/api                                                   │
+│     ▲ Add usage logging to /v1 endpoints                                        1h ago   │
+│  ▲ Not under a goal                                                                       │
+│     ▲ Port settings to new layout (faded: stale?) · carol/codex/web             1d ago   │
+│   +7 more tasks                                                                           │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -956,15 +985,14 @@ Interactions are plain `<form method=post>`. A ~40-line script upgrades them to
 
 - `GET /events` is served by mist's SSE support. Each connection is its own
   process. It subscribes to the store's pubsub, and on `BoardChanged` renders the
-  page's **zones** (`#zone-header`, `#zone-agents`, `#zone-decisions`, `#zone-cols`,
-  `#zone-hidden`,
-  `#zone-tasks`, `#zone-footer`) for this viewer's filters (sent as query params
+  page's **zones** (`#zone-header`, `#zone-agents`, `#zone-decisions`, `#zone-goals`,
+  `#zone-hidden`, `#zone-footer`) for this viewer's filters (sent as query params
   on the EventSource URL). It hashes each zone and sends only the zones whose
   hash changed:
 
   ```
   event: swap
-  data: <section id="zone-tasks" class="zone">…</section>
+  data: <section id="zone-goals" class="zone">…</section>
   ```
 - When one of **the viewer's own agents** posts a decision (§4.3), the
   connection also sends:
@@ -1589,7 +1617,7 @@ board updates over SSE as it does today.
   send button.
 - **Task lines** get a **comment** `<details>` (a textarea and a send button)
   next to `hide`.
-- **Goal rectangles** get the same control. A rectangle that merges several
+- **Goal rows** get the same control. A row that merges several
   agents' overlapping goals (§8, rule 5) posts the comment to each of those
   goals, using the extra `also=<id>` fields, so every agent working on the
   goal gets it. Each goal gets its own comment record.

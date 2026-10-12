@@ -66,7 +66,8 @@
       "not_a_question": 0.4,
       "duplicate": 0.75,
       "overlap": 0.7,
-      "stale": 0.6
+      "stale": 0.6,
+      "goal": 0.5
     },
     "sweep_interval_minutes": 15,
     "sweep_idle_hours": 2,

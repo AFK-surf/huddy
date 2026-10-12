@@ -126,3 +126,67 @@ pub fn untouched_test() {
   let found = review.untouched(s, 3, now)
   assert list.length(found) == 1
 }
+
+pub fn task_review_files_the_task_under_a_goal_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let #(s, g1) = state.create_item(s, a, support.goal("Ship OAuth login"), now)
+  let #(s, g2) = state.create_item(s, a, support.goal("Speed up CI"), now)
+  let #(s, t) =
+    state.create_item(s, a, support.task("Cache the Gleam build"), now)
+  let req = review.write_request(s, t, now)
+  let assert Ok(jev.Choice(_, criteria)) = list.key_find(req.questions, "goal")
+  assert list.map(criteria, fn(c) { c.0 }) |> list.sort(string.compare)
+    == [model.item_ref(g1.id), model.item_ref(g2.id), "none"]
+    |> list.sort(string.compare)
+  let filing = fn(answer) {
+    review.interpret_filing(
+      req.context,
+      dict.from_list([#("goal", answer)]),
+      config.default_thresholds(),
+    )
+  }
+  assert filing(choice(model.item_ref(g2.id), 0.8))
+    == review.Filing(goal: Some(Some(g2.id)), tasks: [])
+  assert filing(choice("none", 0.9)) == review.Filing(Some(None), [])
+  // not confident: leave it where it is
+  assert filing(choice(model.item_ref(g1.id), 0.3)) == review.Filing(None, [])
+}
+
+pub fn goal_review_adopts_unfiled_tasks_test() {
+  let #(s, a, b) = support.two_agents(now)
+  // posted before any goal: unfiled
+  let #(s, loose) =
+    state.create_item(s, a, support.task("Write the setup guide"), now)
+  let #(s, old_goal) = state.create_item(s, a, support.goal("Docs"), now)
+  // filed under the agent's only goal
+  let #(s, filed) =
+    state.create_item(s, a, support.task("Proofread the guide"), now)
+  assert filed.goal == Some(old_goal.id)
+  let #(s, _) = state.create_item(s, b, support.task("Someone else's"), now)
+  let #(s, g) =
+    state.create_item(s, a, support.goal("Onboard new teammates"), now)
+  let req = review.write_request(s, g, now)
+  let serves =
+    list.filter(req.questions, fn(q) { string.starts_with(q.0, "serves_") })
+  assert list.map(serves, fn(q) { q.0 })
+    == ["serves_" <> model.item_ref(loose.id)]
+  assert !list.any(req.questions, fn(q) { q.0 == "goal" })
+  let filing =
+    review.interpret_filing(
+      req.context,
+      dict.from_list([
+        #("serves_" <> model.item_ref(loose.id), jev.NoulAnswer(0.8)),
+      ]),
+      config.default_thresholds(),
+    )
+  assert filing == review.Filing(None, [loose.id])
+  let filing =
+    review.interpret_filing(
+      req.context,
+      dict.from_list([
+        #("serves_" <> model.item_ref(loose.id), jev.NoulAnswer(0.2)),
+      ]),
+      config.default_thresholds(),
+    )
+  assert filing == review.Filing(None, [])
+}

@@ -369,6 +369,19 @@ pub fn create_item(
 ) -> #(State, Item) {
   let #(state, id) =
     bump(state, fn(n) { #(n.item, model.NextIds(..n, item: n.item + 1)) })
+  // until the decision model classifies it, a task serves the agent's goal
+  // when it has just one
+  let goal = case new.kind {
+    model.Task ->
+      case
+        open_items_of(state, agent_id)
+        |> list.filter(fn(i) { i.kind == model.Goal })
+      {
+        [only] -> Some(only.id)
+        _ -> None
+      }
+    _ -> None
+  }
   let item =
     Item(
       id:,
@@ -386,6 +399,7 @@ pub fn create_item(
       reviewed_at: None,
       stale_p: None,
       overlaps: None,
+      goal:,
       seen_by: None,
       seen_at: None,
       hidden_by: None,
@@ -987,6 +1001,43 @@ pub fn set_review_result(
       )
     _ -> state
   }
+}
+
+/// File a task under one of its agent's goals (or under none). Changes no
+/// version: this is Huddy's classification, not the agent's content.
+pub fn set_task_goal(state: State, task_id: Int, goal: Option(Int)) -> State {
+  case get_item(state, task_id) {
+    Some(i) if i.kind == model.Task && i.goal != goal ->
+      put_item(state, Item(..i, goal:))
+    _ -> state
+  }
+}
+
+/// Move the open tasks filed under goal `from` to goal `to` (a goal that
+/// replaces another takes over its tasks).
+pub fn move_tasks(state: State, from: Int, to: Int) -> State {
+  open_items(state)
+  |> list.filter(fn(i) { i.kind == model.Task && i.goal == Some(from) })
+  |> list.fold(state, fn(s, i) { put_item(s, Item(..i, goal: Some(to))) })
+}
+
+/// The agent's open tasks not filed under one of its open goals.
+pub fn unfiled_tasks(state: State, agent_id: Int) -> List(Item) {
+  let open = open_items_of(state, agent_id)
+  let goals =
+    list.filter_map(open, fn(i) {
+      case i.kind {
+        model.Goal -> Ok(i.id)
+        _ -> Error(Nil)
+      }
+    })
+  list.filter(open, fn(i) {
+    i.kind == model.Task
+    && case i.goal {
+      Some(g) -> !list.contains(goals, g)
+      None -> True
+    }
+  })
 }
 
 // --- findings -----------------------------------------------------------------
@@ -1810,8 +1861,12 @@ pub fn prune(state: State, policy: RetentionPolicy, now: Int) -> State {
     state.items
     |> dict.drop(doomed)
     |> dict.map_values(fn(_, i) {
-      case is_doomed(i.overlaps) {
+      let i = case is_doomed(i.overlaps) {
         True -> Item(..i, overlaps: None)
+        False -> i
+      }
+      case is_doomed(i.goal) {
+        True -> Item(..i, goal: None)
         False -> i
       }
     })

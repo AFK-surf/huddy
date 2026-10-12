@@ -72,6 +72,10 @@ pub type Item {
     reviewed_at: Option(Int),
     stale_p: Option(Float),
     overlaps: Option(Int),
+    /// tasks: the agent's goal this task serves, as classified by the
+    /// decision model (see `huddy/review`); None when it serves none, or
+    /// before it is classified
+    goal: Option(Int),
     seen_by: Option(Int),
     seen_at: Option(Int),
     hidden_by: Option(Int),

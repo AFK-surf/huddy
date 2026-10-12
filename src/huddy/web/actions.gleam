@@ -69,7 +69,7 @@ pub fn handle(ctx: Ctx, req: Request, id: String, action: String) -> Response {
 }
 
 /// Add a comment (or a decision answer: `pick`) to the item. A goal
-/// rectangle that merges several agents' goals also names the others in
+/// row that merges several agents' goals also names the others in
 /// `also`, so each agent gets the comment on its own goal. All or nothing.
 fn comment(
   ctx: Ctx,

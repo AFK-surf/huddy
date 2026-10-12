@@ -35,11 +35,25 @@ pub type Mail {
   Mail(to: String, subject: String, body: String)
 }
 
-/// Answers: importance 2, readable, and "same as" the first candidate.
-fn fake_ask(_state: json.Json, questions: List(#(String, jev.Question))) {
+/// Answers: importance 2, readable, "same as" the first candidate, a task
+/// serves the agent's last goal, and every unfiled task serves a new goal
+/// whose title starts with "All of".
+fn fake_ask(state: json.Json, questions: List(#(String, jev.Question))) {
+  let adopts = string.contains(json.to_string(state), "\"title\":\"All of")
   let answers =
     list.filter_map(questions, fn(q) {
       case q {
+        #("goal", jev.Choice(_, criteria)) ->
+          case list.reverse(criteria) {
+            [_none, #(last, _), ..] ->
+              Ok(#(
+                "goal",
+                jev.ChoiceAnswer(last, 0.9, dict.from_list([#(last, 0.9)])),
+              ))
+            _ -> Error(Nil)
+          }
+        #("serves_" <> _ as name, _) if adopts ->
+          Ok(#(name, jev.NoulAnswer(0.9)))
         #("importance", _) ->
           Ok(#("importance", jev.ScoreAnswer(2.0, 0.9, dict.new())))
         #("readable", _) -> Ok(#("readable", jev.NoulAnswer(0.95)))

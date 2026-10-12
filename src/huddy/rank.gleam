@@ -67,7 +67,12 @@ pub type CommentView {
 }
 
 pub type GoalGroup {
-  GoalGroup(primary: ItemView, others: List(ItemView))
+  GoalGroup(
+    primary: ItemView,
+    others: List(ItemView),
+    /// the shown tasks filed under any goal in the group, by priority
+    tasks: List(ItemView),
+  )
 }
 
 pub type View {
@@ -78,8 +83,12 @@ pub type View {
     decisions_more: Int,
     goals: List(GoalGroup),
     goals_more: Int,
+    /// every shown task: those under a shown goal (also in its group's
+    /// `tasks`) and the rest (also in `other_tasks`)
     tasks: List(ItemView),
     tasks_more: Int,
+    /// shown tasks not filed under a shown goal
+    other_tasks: List(ItemView),
     hidden: List(ItemView),
     filters: Filters,
     computed_at: Int,
@@ -222,6 +231,28 @@ pub fn compute(
       slots(expand == "goals", display.slots_goals),
       previous.goals,
     )
+  // shown tasks go under their shown goal's group, the rest stay apart
+  let group_of =
+    list.fold(goals_shown, dict.new(), fn(acc, g) {
+      list.fold([g.primary, ..g.others], acc, fn(acc, member) {
+        dict.insert(acc, member.item.id, g.primary.item.id)
+      })
+    })
+  let under = fn(t: ItemView) {
+    option.then(t.item.goal, fn(goal) {
+      dict.get(group_of, goal) |> option.from_result
+    })
+  }
+  let goals_shown =
+    list.map(goals_shown, fn(g) {
+      GoalGroup(
+        ..g,
+        tasks: list.filter(tasks_shown, fn(t) {
+          under(t) == Some(g.primary.item.id)
+        }),
+      )
+    })
+  let other_tasks = list.filter(tasks_shown, fn(t) { under(t) == None })
 
   let agent_views =
     agents
@@ -259,6 +290,7 @@ pub fn compute(
       goals_more:,
       tasks: tasks_shown,
       tasks_more:,
+      other_tasks:,
       hidden:,
       filters:,
       computed_at: now,
@@ -461,7 +493,7 @@ fn group_goals(goals: List(ItemView)) -> List(GoalGroup) {
   |> list.map(fn(members) {
     let sorted = list.sort(members, by_priority)
     let assert [primary, ..others] = sorted
-    GoalGroup(primary:, others:)
+    GoalGroup(primary:, others:, tasks: [])
   })
   |> list.sort(fn(a, b) { by_priority(a.primary, b.primary) })
 }
