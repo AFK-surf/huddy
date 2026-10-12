@@ -202,7 +202,7 @@ Literal values work too.
     "detail_max_chars": 2000,
     "writes_per_agent_per_minute": 12,
     "document_max_mb": 20,                       // a document's files, unzipped (§16)
-    "comment_max_chars": 1000,                   // comments and answers (§17)
+    "comment_max_chars": 10000,                  // comments and answers (§17)
     "comments_per_item": 100,
     "comments_per_user_per_minute": 12
   },
@@ -1540,7 +1540,7 @@ notes work) would lose comments:
 | `id` | `c<N>` as agents see it (`model.comment_ref`); `huddy_ack` needs the prefix, since a bare number could also be a finding |
 | `item` | the goal, task or decision it is on |
 | `author` | `user:<id>` (a human) or `agent:<id>` (the item's own agent) |
-| `body` | plain text, 1–`limits.comment_max_chars` (default 1000) characters, trimmed; can be empty only when `pick` is set |
+| `body` | plain text, 1–`limits.comment_max_chars` (default 10000, at most 100000) characters, trimmed; can be empty only when `pick` is set |
 | `pick` | decisions only, optional: one of the item's `options`, exactly as the agent wrote it |
 | `created_at` | |
 | `sent_at` | human comments: when it was last included in a tool result for the agent (§17.4); agent comments: always `null` |
@@ -1770,8 +1770,9 @@ agents. `open` findings load unacked and go out under the new rules.
 ]
 ```
 
-Size: 100 comments × 1000 characters is the worst case per item. Real threads
-are a few short lines, well inside the §5.4 budget.
+Size: 100 comments × 10000 characters, about 1 MB, is the worst case per
+item. Real threads are a few short lines, well inside the §5.4 budget; a team
+that sees large threads can lower `comment_max_chars` or `comments_per_item`.
 
 ### 17.7 Security
 

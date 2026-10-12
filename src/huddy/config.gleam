@@ -279,7 +279,7 @@ pub fn decoder() -> Decoder(Config) {
   use limits <- section(
     "limits",
     limits_decoder(),
-    Limits(120, 2000, 12, 20, 1000, 100, 12),
+    Limits(120, 2000, 12, 20, 10_000, 100, 12),
   )
   use documents <- section(
     "documents",
@@ -687,7 +687,7 @@ fn limits_decoder() -> Decoder(Limits) {
   use d <- opt("detail_max_chars", 2000, decode.int)
   use w <- opt("writes_per_agent_per_minute", 12, decode.int)
   use m <- opt("document_max_mb", 20, decode.int)
-  use cm <- opt("comment_max_chars", 1000, decode.int)
+  use cm <- opt("comment_max_chars", 10_000, decode.int)
   use ci <- opt("comments_per_item", 100, decode.int)
   use cu <- opt("comments_per_user_per_minute", 12, decode.int)
   decode.success(Limits(
@@ -764,8 +764,8 @@ fn validate(config: Config) -> Result(Config, String) {
     _ -> Error("config: limits.document_max_mb must be between 1 and 1000")
   })
   use _ <- result.try(case config.limits.comment_max_chars {
-    n if n >= 1 && n <= 10_000 -> Ok(Nil)
-    _ -> Error("config: limits.comment_max_chars must be between 1 and 10000")
+    n if n >= 1 && n <= 100_000 -> Ok(Nil)
+    _ -> Error("config: limits.comment_max_chars must be between 1 and 100000")
   })
   use _ <- result.try(
     case

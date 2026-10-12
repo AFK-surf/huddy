@@ -131,7 +131,7 @@ be commented on.
 - Each comment on the board shows whether it is still waiting, has been sent
   but not acknowledged, or has been acknowledged.
 
-Limits: `limits.comment_max_chars` (default 1000), `limits.comments_per_item`
+Limits: `limits.comment_max_chars` (default 10000), `limits.comments_per_item`
 (100) and `limits.comments_per_user_per_minute` (12). Details:
 [DESIGN.md §17](docs/DESIGN.md#17-comments).
 

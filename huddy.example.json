@@ -92,7 +92,7 @@
     "detail_max_chars": 2000,
     "writes_per_agent_per_minute": 12,
     "document_max_mb": 20,
-    "comment_max_chars": 1000,
+    "comment_max_chars": 10000,
     "comments_per_item": 100,
     "comments_per_user_per_minute": 12
   },
