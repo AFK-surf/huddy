@@ -46,16 +46,31 @@ pub fn agents_are_shared_by_identity_test() {
   assert dict.size(s2.agents) == dict.size(s.agents)
 }
 
-pub fn new_goal_replaces_old_goal_test() {
+pub fn agents_can_have_several_goals_test() {
   let #(s, a, _) = support.two_agents(now)
   let #(s, g1) = state.create_item(s, a, support.goal("First"), now)
   let #(s, g2) = state.create_item(s, a, support.goal("Second"), now + 1)
+  let open_goals =
+    state.open_items_of(s, a) |> list.filter(fn(i) { i.kind == model.Goal })
+  assert list.map(open_goals, fn(i) { i.id }) == [g2.id, g1.id]
+}
+
+pub fn replace_goal_closes_only_that_goal_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, g1) = state.create_item(s, a, support.goal("First"), now)
+  let #(s, g2) = state.create_item(s, a, support.goal("Second"), now)
+  let #(s, t) = state.create_item(s, a, support.task("A task"), now)
+  let assert Ok(s) = state.replace_goal(s, a, g1.id, now + 1)
   let assert Some(old) = state.get_item(s, g1.id)
   assert old.state == model.Replaced
   assert option.is_some(old.closed_at)
-  let open_goals =
-    state.open_items_of(s, a) |> list.filter(fn(i) { i.kind == model.Goal })
-  assert list.map(open_goals, fn(i) { i.id }) == [g2.id]
+  let assert Some(other) = state.get_item(s, g2.id)
+  assert other.state == model.Active
+  // not twice, not someone else's, not a task
+  let assert Error(_) = state.replace_goal(s, a, g1.id, now + 2)
+  let assert Error(message) = state.replace_goal(s, b, g2.id, now + 2)
+  assert string.contains(message, "only replace their own")
+  let assert Error(_) = state.replace_goal(s, a, t.id, now + 2)
 }
 
 pub fn agents_only_edit_their_own_items_test() {

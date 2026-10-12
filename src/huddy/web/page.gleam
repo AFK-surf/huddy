@@ -584,7 +584,7 @@ fn goal(g: rank.GoalGroup) -> Node {
     html.div([html.class("bubble sk")], [
       html.raw(sketch.frame(
         seed(p),
-        sketch.Ellipse,
+        sketch.Rect,
         320,
         90,
         "goal",

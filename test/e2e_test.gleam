@@ -22,6 +22,7 @@ import huddy/blob
 import huddy/config.{type Config}
 import huddy/ctx.{type Ctx}
 import huddy/jev
+import huddy/model
 import huddy/net
 import huddy/persist
 import huddy/state
@@ -707,6 +708,58 @@ pub fn link_records_forwarded_client_ip_test() {
     )
   assert resp.status == 200
   assert link_ips(ctx) == [Some("203.0.113.7")]
+}
+
+/// "Stored goal i3 for …" → "i3"
+fn goal_id(resp: Response(String)) -> String {
+  let assert Ok(#(_, rest)) = string.split_once(tool_text(resp), "Stored goal ")
+  let assert Ok(#(id, _)) = string.split_once(rest, " ")
+  id
+}
+
+pub fn several_goals_test() {
+  let #(ctx, _) = boot(48_308)
+  let link = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let set_goal = fn(fields) {
+    rpc(
+      link,
+      [],
+      call(
+        "huddy_set_goal",
+        json.object([#("project", json.string("huddy")), ..fields]),
+      ),
+    )
+  }
+  let first = set_goal([#("title", json.string("Ship OAuth login"))])
+  let first_id = goal_id(first)
+  let second = set_goal([#("title", json.string("Move state to S3"))])
+  let second_id = goal_id(second)
+  let third =
+    set_goal([
+      #("title", json.string("Ship OAuth and secret links")),
+      #("replaces", json.string(first_id)),
+    ])
+  assert string.contains(tool_text(third), "It replaces " <> first_id <> ".")
+  let third_id = goal_id(third)
+  let bad =
+    set_goal([
+      #("title", json.string("Again")),
+      #("replaces", json.string(first_id)),
+    ])
+  assert string.contains(tool_text(bad), "not an active goal")
+  let goals =
+    store.read(ctx.store, fn(s, _) {
+      dict.values(s.items)
+      |> list.map(fn(i) {
+        #(model.item_ref(i.id), model.state_to_string(i.state))
+      })
+      |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+    })
+  assert goals
+    == list.sort(
+      [#(first_id, "replaced"), #(second_id, "active"), #(third_id, "active")],
+      fn(a, b) { string.compare(a.0, b.0) },
+    )
 }
 
 pub fn concurrent_writes_are_durable_test() {

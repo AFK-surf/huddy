@@ -105,7 +105,7 @@ versions 2026-07-28 and 2025-11-25).
 - **Secret URL:** create one in *Settings* (optionally pinned to an agent name
   and project, and optionally read-only), then use it as the server URL.
 
-The server's instructions teach agents the protocol. They set one goal, keep a
+The server's instructions teach agents the protocol. They set goals (one per outcome), keep a
 few tasks open, post decisions when unsure (marked blocking if they have
 stopped), act on review findings or dismiss them with a reason, and close items
 when done.

@@ -173,7 +173,7 @@ pub fn compute(
       previous.tasks,
     )
 
-  // goals: one per agent; overlapping goals merge into one group
+  // goals: any number per agent; overlapping goals merge into one group
   let goal_views =
     visible_items
     |> list.filter(fn(i) { i.kind == model.Goal })

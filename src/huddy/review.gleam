@@ -85,11 +85,10 @@ fn item_brief(s: State, item: Item, now: Int) -> Json {
   ])
 }
 
-fn current_goal(s: State, agent_id: Int) -> String {
+fn current_goals(s: State, agent_id: Int) -> Json {
   state.open_items_of(s, agent_id)
-  |> list.find(fn(i) { i.kind == model.Goal })
-  |> result.map(fn(g) { g.title })
-  |> result.unwrap("")
+  |> list.filter(fn(i) { i.kind == model.Goal })
+  |> json.array(fn(g) { json.string(g.title) })
 }
 
 /// The one request made for a post or edit (§6.2).
@@ -100,11 +99,7 @@ pub fn write_request(s: State, item: Item, now: Int) -> Request {
   }
   let candidates =
     state.open_items(s)
-    |> list.filter(fn(i) {
-      i.id != item.id
-      && i.kind == item.kind
-      && !{ item.kind == model.Goal && i.agent == item.agent }
-    })
+    |> list.filter(fn(i) { i.id != item.id && i.kind == item.kind })
   let similar_items =
     similar.top(
       item.title <> " " <> item.detail,
@@ -136,7 +131,7 @@ pub fn write_request(s: State, item: Item, now: Int) -> Request {
     json.object([
       #("new_item", new_item),
       #("agent", json.string(label)),
-      #("agent_goal", json.string(current_goal(s, item.agent))),
+      #("agent_goals", current_goals(s, item.agent)),
       #("agent_open_items", json.array(own_open, item_brief(s, _, now))),
       #("similar_items", json.array(similar_items, item_brief(s, _, now))),
     ])
@@ -407,7 +402,7 @@ pub fn sweep_request(
       let state_json =
         json.object([
           #("agent", json.string(state.agent_label(s, agent_id))),
-          #("agent_goal", json.string(current_goal(s, agent_id))),
+          #("agent_goals", current_goals(s, agent_id)),
           #("open_items", json.array(open, item_brief(s, _, now))),
           #("recent_items", json.array(recent, item_brief(s, _, now))),
         ])

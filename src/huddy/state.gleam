@@ -360,22 +360,13 @@ pub type NewItem {
   )
 }
 
-/// Create an item. A new goal replaces the agent's current active goal.
+/// Create an item. An agent may have several active goals.
 pub fn create_item(
   state: State,
   agent_id: Int,
   new: NewItem,
   now: Int,
 ) -> #(State, Item) {
-  let state = case new.kind {
-    model.Goal ->
-      open_items_of(state, agent_id)
-      |> list.filter(fn(i) { i.kind == model.Goal })
-      |> list.fold(state, fn(s, goal) {
-        close_item(s, goal, model.Replaced, now, agent_actor(agent_id), "")
-      })
-    _ -> state
-  }
   let #(state, id) =
     bump(state, fn(n) { #(n.item, model.NextIds(..n, item: n.item + 1)) })
   let item =
@@ -532,6 +523,26 @@ pub fn edit_item(
   let state = touch_agent(state, agent_id, now)
   let final = get_item(state, id) |> option.unwrap(item)
   Ok(#(state, EditOutcome(item: final, content_changed:)))
+}
+
+/// Close one of the agent's active goals as `replaced` (by a new goal).
+pub fn replace_goal(
+  state: State,
+  agent_id: Int,
+  goal_id: Int,
+  now: Int,
+) -> Result(State, String) {
+  case get_item(state, goal_id) {
+    Some(goal) if goal.agent != agent_id ->
+      Error(
+        model.item_ref(goal_id)
+        <> " belongs to another agent; agents can only replace their own goals.",
+      )
+    Some(goal) if goal.kind == model.Goal && goal.state == model.Active ->
+      Ok(close_item(state, goal, model.Replaced, now, agent_actor(agent_id), ""))
+    Some(_) -> Error(model.item_ref(goal_id) <> " is not an active goal.")
+    None -> Error("No item " <> model.item_ref(goal_id) <> ".")
+  }
 }
 
 /// Close an item: set the final state, resolve its findings and any

@@ -15,7 +15,7 @@ statements:
 
 | Category | Meaning | Shape | Color (Excalidraw palette) |
 |---|---|---|---|
-| **Goal** | The end state an agent is heading towards. **One per agent.** | ● circle | blue `#1971c2` / fill `#a5d8ff` |
+| **Goal** | An end state an agent is heading towards. **Any number per agent.** Drawn as a rectangle on the board. | ● circle | blue `#1971c2` / fill `#a5d8ff` |
 | **Task** | Concrete work the agent is doing now. | ▲ triangle | green `#2f9e44` / fill `#b2f2bb` |
 | **Decision** | Something the agent is unsure about and wants a human to look at. | ◆ diamond (filled = **blocking**, hollow = non-blocking) | orange `#f08c00` / fill `#ffec99` |
 
@@ -234,7 +234,7 @@ access everywhere, without separate revocation.
     name/project when it is created.
 - **Concurrent sessions share a slot.** Two of alice's Claude Code sessions on
   the same repo resolve to the same agent, `alice/claude-code/huddy`, and share
-  one goal and one task list. They are the same "worker" from the team's point
+  their goals and one task list. They are the same "worker" from the team's point
   of view, and anyone who wants them separated passes `agent: "claude-code-2"`.
   One agent per MCP connection isn't an option anyway: MCP 2026-07-28 removed
   sessions entirely.
@@ -259,8 +259,9 @@ One table holds all three categories.
 | `hidden_by`, `hidden_note` | a human hid it from the display |
 
 Rules, enforced in code rather than by the model:
-- **One active goal per agent.** Setting a new goal moves the old one to `replaced`.
-  This replaces the goal; it never rejects it.
+- **Any number of active goals per agent.** A new goal leaves the others open;
+  an agent closes a goal with `achieved`/`abandoned`, or names it in
+  `replaces` when setting the goal that supersedes it (it becomes `replaced`).
 - Agents can only modify their own items. Humans can mark decisions seen, and
   hide or un-hide any item.
 - Open-item counts above the guideline (`open_tasks_guideline`,
@@ -609,7 +610,7 @@ When an agent posts or edits an item:
     "new_item": { "kind": "task", "title": "Fix flaky OAuth refresh test",
                   "detail": "Test races the token expiry; switching to an injected clock." },
     "agent": "alice/codex/huddy",
-    "agent_goal": "Ship OAuth login for the MCP endpoint",
+    "agent_goals": [ "Ship OAuth login for the MCP endpoint" ],
     "agent_open_items": [ { "ref": "i41", "kind": "task", "title": "Write refresh-token rotation", "updated": "3h ago" } ],
     "similar_items":    [ { "ref": "i17", "agent": "bob/claude-code/huddy", "title": "Deflake auth test suite" } ]
   },
@@ -772,7 +773,7 @@ shown as the default for `agent`.
 | Tool | Args | Behaviour |
 |---|---|---|
 | `huddy_read` | `scope?: "display"\|"all"`, `owner?`, `project?`, `agent?`, `include_closed?` | `display` (default) returns exactly what humans see, plus "N more hidden" counts. `all` returns every open item. Items are wrapped as quoted data with author, age, and markers (stale, overlap). |
-| `huddy_set_goal` | `project, agent?, title, detail?` | Replaces the agent's goal (the old one becomes `replaced`), then reviews it. Returns `{id, review}`. |
+| `huddy_set_goal` | `project, agent?, title, detail?, replaces?` | Adds a goal; the agent's other goals stay open. `replaces: "i41"` closes that goal (one of the agent's own active goals) as `replaced`. Then reviews it. Returns `{id, review}`. |
 | `huddy_post` | `project, agent?, kind: "task"\|"decision", title, detail?, blocking?, options?` | Stores and reviews the item. Returns `{id, review: {status: "done"\|"pending", findings[]}}`. |
 | `huddy_update` | `project, agent?, id, title?, detail?, state?, blocking?, dismiss?: [finding ids], reason?` | Edits or closes the agent's own item (`done`, `dropped`, `resolved`, `withdrawn`, `achieved`, `abandoned`), and/or dismisses findings about it. An edit creates a new version, which resolves the old findings and triggers a new review. |
 | `huddy_inbox` | `project, agent?` | Returns open findings addressed to this agent and marks them delivered. |
@@ -846,8 +847,9 @@ goal.priority      = max priority of the agent's open items, + 0.2 if active in 
 3. **Hysteresis.** A hidden item replaces a visible one only if it beats it by
    0.05, so the display doesn't flicker as scores move.
 4. Ties break by `updated_at` (newer first).
-5. Goals: one per agent. Goals linked by an open `overlap` (two agents, same
-   goal) render as **one circle with several agent chips**.
+5. Goals: any number per agent, each drawn as a rectangle. Goals linked by an
+   open `overlap` (two agents, same goal) render as **one rectangle with
+   several agent chips**.
 6. Items hidden by a human are left out. The footer links to `?expand=hidden`,
    which lists them with an un-hide button.
 7. **Away agents are left out by default**, with their goals, tasks and
