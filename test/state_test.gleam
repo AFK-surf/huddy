@@ -1,4 +1,5 @@
 import gleam/dict
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -462,4 +463,71 @@ pub fn refresh_family_revocation_test() {
   let s = state.put_token(s, token("b", model.AccessToken))
   let s = state.revoke_grant(s, g.id, 1, now)
   assert state.valid_token(s, "b", model.AccessToken, now) == None
+}
+
+pub fn a_new_task_serves_the_agents_only_goal_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, t0) = state.create_item(s, a, support.task("no goal yet"), now)
+  assert t0.goal == None
+  let #(s, g1) = state.create_item(s, a, support.goal("Ship OAuth"), now)
+  // another agent's goal doesn't count
+  let #(s, _) = state.create_item(s, b, support.goal("Theirs"), now)
+  let #(s, t1) = state.create_item(s, a, support.task("one goal"), now)
+  assert t1.goal == Some(g1.id)
+  let #(s, d) = state.create_item(s, a, support.decision("Which?", False), now)
+  assert d.goal == None
+  let #(s, g2) = state.create_item(s, a, support.goal("Speed up CI"), now)
+  let #(s, t2) = state.create_item(s, a, support.task("two goals"), now)
+  assert t2.goal == None
+  assert list.map(state.unfiled_tasks(s, a), fn(i) { i.id })
+    |> list.sort(int.compare)
+    == [t0.id, t2.id]
+  // a replacing goal takes over the replaced goal's tasks
+  let assert Ok(s) = state.replace_goal(s, a, g1.id, now)
+  let s = state.move_tasks(s, g1.id, g2.id)
+  let assert Some(t1) = state.get_item(s, t1.id)
+  assert t1.goal == Some(g2.id)
+  let s = state.set_task_goal(s, t0.id, Some(g2.id))
+  let assert Some(t0) = state.get_item(s, t0.id)
+  assert t0.goal == Some(g2.id)
+  assert t0.version == 1
+}
+
+pub fn prune_drops_goal_links_to_pruned_goals_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let #(s, g) = state.create_item(s, a, support.goal("Old goal"), now)
+  let #(s, t) = state.create_item(s, a, support.task("Still open"), now)
+  assert t.goal == Some(g.id)
+  let assert Ok(#(s, _)) =
+    state.edit_item(
+      s,
+      a,
+      g.id,
+      state.Edit(None, None, None, None, Some(model.Abandoned), None),
+      now,
+    )
+  let later = now + state.days(31)
+  let s = state.touch_agent(s, a, later)
+  let s = state.prune(s, state.RetentionPolicy(30, 90, 14, 90, 0), later)
+  assert state.get_item(s, g.id) == None
+  let assert Some(t) = state.get_item(s, t.id)
+  assert t.goal == None
+}
+
+pub fn tasks_only_go_under_their_own_agents_goals_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, mine) = state.create_item(s, a, support.goal("Mine"), now)
+  let #(s, theirs) = state.create_item(s, b, support.goal("Theirs"), now)
+  let #(s, t) = state.create_item(s, a, support.task("A task"), now)
+  assert t.goal == Some(mine.id)
+  let goal_of = fn(s) {
+    let assert Some(i) = state.get_item(s, t.id)
+    i.goal
+  }
+  // another agent's goal, a task, or a missing item: ignored
+  assert goal_of(state.set_task_goal(s, t.id, Some(theirs.id))) == Some(mine.id)
+  assert goal_of(state.set_task_goal(s, t.id, Some(t.id))) == Some(mine.id)
+  assert goal_of(state.set_task_goal(s, t.id, Some(9999))) == Some(mine.id)
+  assert goal_of(state.move_tasks(s, mine.id, theirs.id)) == Some(mine.id)
+  assert goal_of(state.set_task_goal(s, t.id, None)) == None
 }

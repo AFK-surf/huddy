@@ -178,3 +178,30 @@ pub fn answered_blockers_sort_after_unanswered_test() {
   assert c.author == "bob"
   assert !c.by_agent
 }
+
+pub fn tasks_are_listed_under_their_goals_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, _) = state.create_item(s, a, support.task("Before the goal"), now)
+  let #(s, g) = state.create_item(s, a, support.goal("Ship OAuth"), now)
+  let #(s, _) = state.create_item(s, a, support.task("Under the goal"), now)
+  let #(s, _) = state.create_item(s, b, support.task("Bob's task"), now)
+  let #(view, _) = compute(s, display(10, 10), rank.no_visible())
+  let assert [group] = view.goals
+  assert group.primary.item.id == g.id
+  assert titles(group.tasks) == ["Under the goal"]
+  assert titles(view.other_tasks) |> list.sort(string.compare)
+    == ["Before the goal", "Bob's task"]
+  assert list.length(view.tasks) == 3
+  // a task whose goal is closed goes back with the others
+  let assert Ok(#(s, _)) =
+    state.edit_item(
+      s,
+      a,
+      g.id,
+      state.Edit(None, None, None, None, Some(model.Achieved), None),
+      now,
+    )
+  let #(view, _) = compute(s, display(10, 10), rank.no_visible())
+  assert view.goals == []
+  assert list.length(view.other_tasks) == 3
+}

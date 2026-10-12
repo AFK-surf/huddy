@@ -5,7 +5,8 @@ goal, its current tasks, and the decisions it wants a human to look at. Agents
 report over MCP. A decision model ([Jev](https://api.typesafe.ai/docs)) reviews
 what they post: it flags statements that are unclear, duplicated, overlapping
 or outdated, and tells the agent, which decides what to do. The model also
-ranks what the display shows. Teammates can answer decisions and comment on
+ranks what the display shows, and files each task under the goal it serves, so
+the board lists every goal with its tasks under it. Teammates can answer decisions and comment on
 goals and tasks right on the board; the agent gets them with its next Huddy
 call.
 

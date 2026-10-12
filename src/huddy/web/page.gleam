@@ -129,7 +129,7 @@ pub fn zones(ctx: Ctx, board: Board) -> List(#(String, String)) {
     #("zone-header", header(ctx, board)),
     #("zone-agents", agents(board)),
     #("zone-decisions", decisions(board)),
-    #("zone-cols", columns(board)),
+    #("zone-goals", goals_zone(board)),
     #("zone-hidden", case expand {
       "hidden" -> hidden(board)
       _ -> html.to_string(html.el("section", [html.id("zone-hidden")], []))
@@ -497,7 +497,7 @@ fn comment_line(board: Board, cv: rank.CommentView) -> Node {
 
 /// "comment" (or "answer" on a decision): a note for the item's agent.
 /// Decisions with options get one button per option. `also` names other
-/// goals that get the same comment (a merged goal rectangle).
+/// goals that get the same comment (goals merged into one row).
 fn comment_control(board: Board, v: ItemView, also: List(Int)) -> Node {
   let item = v.item
   let decision = item.kind == model.Decision
@@ -673,76 +673,95 @@ fn more(n: Int, zone: String, filters: rank.Filters) -> Node {
 
 // --- goals & tasks ---------------------------------------------------------------
 
-fn columns(board: Board) -> String {
+fn goals_zone(board: Board) -> String {
   let v = board.view
+  let shown = list.length(v.tasks)
   html.to_string(
-    html.div([html.id("zone-cols"), html.class("cols")], [
-      html.el("section", [html.class("zone")], [
-        html.el("h2", [], [icon(sketch.GoalIcon, "h-g"), html.text("Goals")]),
-        case v.goals {
-          [] ->
-            html.el("p", [html.class("muted")], [html.text("No goals yet.")])
-          goals ->
-            html.div([html.class("goals")], list.map(goals, goal(board, _)))
-        },
-        more(v.goals_more, "goals", v.filters),
-      ]),
-      html.el("section", [html.class("zone")], [
-        html.el("h2", [], [
-          icon(sketch.TaskIcon, "h-t"),
-          html.text("Tasks "),
-          html.el("small", [], [
-            html.text(
-              int.to_string(list.length(v.tasks))
-              <> " of "
-              <> int.to_string(list.length(v.tasks) + v.tasks_more),
-            ),
-          ]),
+    html.el("section", [html.id("zone-goals"), html.class("zone")], [
+      html.el("h2", [], [
+        icon(sketch.GoalIcon, "h-g"),
+        html.text("Goals & tasks "),
+        html.el("small", [], [
+          html.text(
+            int.to_string(shown)
+            <> " of "
+            <> plural(shown + v.tasks_more, "open task"),
+          ),
         ]),
-        case v.tasks {
-          [] ->
-            html.el("p", [html.class("muted")], [html.text("No open tasks.")])
-          tasks ->
-            html.div([html.class("tasks")], list.map(tasks, task(board, _)))
-        },
-        more(v.tasks_more, "tasks", v.filters),
       ]),
+      case v.goals, v.other_tasks {
+        [], [] ->
+          html.el("p", [html.class("muted")], [
+            html.text("No goals or open tasks yet."),
+          ])
+        goals, _ ->
+          html.div([html.class("goals")], list.map(goals, goal(board, _)))
+      },
+      more(v.goals_more, "goals", v.filters),
+      case v.other_tasks {
+        [] -> html.none()
+        tasks ->
+          html.div([html.class("loose")], [
+            html.el("h3", [], [
+              icon(sketch.TaskIcon, "h-t"),
+              html.text("Not under a goal"),
+            ]),
+            html.div(
+              [html.class("tasks")],
+              list.map(tasks, task(board, _, True)),
+            ),
+          ])
+      },
+      more(v.tasks_more, "tasks", v.filters),
     ]),
   )
 }
 
+/// A goal as a row: its title in the goal colour, who works on it, and the
+/// tasks filed under it.
 fn goal(board: Board, g: rank.GoalGroup) -> Node {
   let p = g.primary
+  let members = [p, ..g.others]
+  let single = g.others == []
   html.div([html.class("goal"), html.id(model.item_ref(p.item.id))], [
-    html.div([html.class("bubble sk")], [
-      html.raw(sketch.frame(seed(p), sketch.Rect, 320, 90, "goal", None)),
-      html.text(p.item.title),
-      doc_links(p),
-    ]),
-    html.div(
-      [html.class("who")],
-      list.map([p, ..g.others], fn(v) {
-        html.span(
-          [
-            html.class(case v.away {
-              True -> "away"
-              False -> ""
-            }),
-          ],
-          [
-            html.text(
-              v.agent_label
-              <> case v.away {
-                True -> " (away)"
+    html.div([html.class("head")], [
+      html.div([html.class("g")], [html.text(p.item.title)]),
+      html.span(
+        [html.class("who")],
+        list.map(members, fn(v) {
+          html.span(
+            [
+              html.class(case v.away {
+                True -> "away"
                 False -> ""
-              },
-            ),
-          ],
-        )
-      }),
-    ),
+              }),
+            ],
+            [
+              html.text(
+                v.agent_label
+                <> case v.away {
+                  True -> " (away)"
+                  False -> ""
+                },
+              ),
+            ],
+          )
+        }),
+      ),
+      comment_control(board, p, list.map(g.others, fn(o) { o.item.id })),
+    ]),
+    doc_links(p),
     thread(board, p, 2),
-    comment_control(board, p, list.map(g.others, fn(o) { o.item.id })),
+    case g.tasks {
+      [] -> html.none()
+      tasks ->
+        html.div(
+          [html.class("tasks")],
+          list.map(tasks, fn(t) {
+            task(board, t, !single || t.item.agent != p.item.agent)
+          }),
+        )
+    },
   ])
 }
 
@@ -754,7 +773,9 @@ fn importance_label(item: model.Item) -> Option(String) {
   }
 }
 
-fn task(board: Board, v: ItemView) -> Node {
+/// A task row. `show_agent` is False under a goal of the same agent, where
+/// the goal row already names it.
+fn task(board: Board, v: ItemView, show_agent: Bool) -> Node {
   let item = v.item
   let stale = option.is_some(item.stale_p)
   html.div(
@@ -782,9 +803,11 @@ fn task(board: Board, v: ItemView) -> Node {
       ]),
       html.div([html.class("side")], [
         html.span([html.class("meta")], [
-          html.text(
-            v.agent_label <> " · " <> fmt.age(board.now, item.updated_at),
-          ),
+          html.text(case show_agent {
+            True ->
+              v.agent_label <> " · " <> fmt.age(board.now, item.updated_at)
+            False -> fmt.age(board.now, item.updated_at)
+          }),
         ]),
         comment_control(board, v, []),
         hide_control(board, v),

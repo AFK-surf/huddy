@@ -177,6 +177,7 @@ pub fn encode_item(i: Item) -> Json {
     #("reviewed_at", opt(i.reviewed_at, json.int)),
     #("stale_p", opt(i.stale_p, json.float)),
     #("overlaps", opt(i.overlaps, json.int)),
+    #("goal", opt(i.goal, json.int)),
     #("seen_by", opt(i.seen_by, json.int)),
     #("seen_at", opt(i.seen_at, json.int)),
     #("hidden_by", opt(i.hidden_by, json.int)),
@@ -536,6 +537,7 @@ pub fn item_decoder() -> Decoder(Item) {
   use reviewed_at <- nullable("reviewed_at", decode.int)
   use stale_p <- nullable("stale_p", number())
   use overlaps <- nullable("overlaps", decode.int)
+  use goal <- nullable("goal", decode.int)
   use seen_by <- nullable("seen_by", decode.int)
   use seen_at <- nullable("seen_at", decode.int)
   use hidden_by <- nullable("hidden_by", decode.int)
@@ -558,6 +560,7 @@ pub fn item_decoder() -> Decoder(Item) {
     reviewed_at:,
     stale_p:,
     overlaps:,
+    goal:,
     seen_by:,
     seen_at:,
     hidden_by:,
@@ -911,7 +914,10 @@ pub fn check_references(state: State) -> Result(Nil, String) {
       check_all(dict.values(state.items), fn(i) {
         case check(dict.has_key(state.agents, i.agent), "item agent", i.agent) {
           Ok(_) ->
-            case opt_item("item overlaps", i.overlaps) {
+            case
+              opt_item("item overlaps", i.overlaps)
+              |> result.try(fn(_) { opt_item("item goal", i.goal) })
+            {
               Ok(_) ->
                 case opt_user("item seen_by", i.seen_by) {
                   Ok(_) ->

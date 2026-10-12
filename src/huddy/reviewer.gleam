@@ -107,7 +107,16 @@ pub fn review_item(ctx: Ctx, item_id: Int) -> Nil {
                           importance,
                           now,
                         )
-                      add_findings(s, findings, now, cd).0
+                      let s = add_findings(s, findings, now, cd).0
+                      file_tasks(
+                        s,
+                        req.context.item,
+                        review.interpret_filing(
+                          req.context,
+                          resp.answers,
+                          thresholds,
+                        ),
+                      )
                     }
                     False -> s
                   }
@@ -142,6 +151,24 @@ pub fn review_item(ctx: Ctx, item_id: Int) -> Nil {
       }
     }
   }
+}
+
+/// Apply a review's filing: the reviewed task goes under the goal the model
+/// picked, and a reviewed goal takes the tasks that serve it, if they are
+/// still unfiled.
+fn file_tasks(
+  s: model.State,
+  item: model.Item,
+  filing: review.Filing,
+) -> model.State {
+  let s = case filing.goal {
+    Some(goal) -> state.set_task_goal(s, item.id, goal)
+    None -> s
+  }
+  let unfiled = state.unfiled_tasks(s, item.agent) |> list.map(fn(t) { t.id })
+  filing.tasks
+  |> list.filter(list.contains(unfiled, _))
+  |> list.fold(s, fn(s, task) { state.set_task_goal(s, task, Some(item.id)) })
 }
 
 /// Start a review and wait up to `wait_ms` for it. Returns True when the

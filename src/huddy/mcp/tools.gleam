@@ -1083,6 +1083,10 @@ fn create(
         Error(reason) -> store.NoChange(Error(reason))
         Ok(s) -> {
           let #(s, item) = state.create_item(s, agent.id, new, now)
+          let s = case replaces {
+            Some(goal_id) -> state.move_tasks(s, goal_id, item.id)
+            None -> s
+          }
           let s = reviewer.check_open_counts(ctx, s, agent.id, now)
           let effects = case item.kind {
             model.Decision -> [store.Publish, store.NotifyDecision(item.id)]
@@ -2086,6 +2090,10 @@ pub fn board_text(
       Some(_) -> ["    ? may be outdated"]
       None -> []
     }
+    let goal = case i.goal {
+      Some(g) -> ["    under goal " <> model.item_ref(g)]
+      None -> []
+    }
     let docs = case v.docs {
       [] -> []
       ds -> [
@@ -2121,6 +2129,7 @@ pub fn board_text(
     string.join(
       list.flatten([
         [head],
+        goal,
         detail,
         options,
         docs,
@@ -2229,6 +2238,7 @@ pub fn board_text(
         ),
       ),
       #("may_be_outdated", json.bool(option.is_some(i.stale_p))),
+      #("goal", json.nullable(option.map(i.goal, model.item_ref), json.string)),
       #(
         "docs",
         json.array(v.docs, fn(d) {
