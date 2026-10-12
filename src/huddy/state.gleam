@@ -627,13 +627,12 @@ pub fn check_revision(
   state: State,
   at: DocRevision,
 ) -> Result(Document, String) {
-  let ref = model.doc_ref(at.id)
   case get_document(state, at.id) {
-    None -> Error("No document " <> ref <> ".")
+    None -> Error(no_document(at.id))
     Some(doc) if doc.version == at.revision -> Ok(doc)
     Some(doc) ->
       Error(
-        ref
+        model.doc_ref(doc)
         <> " is at revision "
         <> int.to_string(doc.version)
         <> ", not "
@@ -650,14 +649,14 @@ pub fn check_revision(
 /// Every id must name an existing document.
 pub fn check_docs(state: State, ids: List(Int)) -> Result(Nil, String) {
   case list.find(ids, fn(id) { !dict.has_key(state.documents, id) }) {
-    Ok(id) ->
-      Error(
-        "No document "
-        <> model.doc_ref(id)
-        <> ". List documents with huddy_doc_list.",
-      )
+    Ok(id) -> Error(no_document(id) <> " List documents with huddy_doc_list.")
     Error(_) -> Ok(Nil)
   }
+}
+
+/// "No document 42.": the error for an id that names no document.
+pub fn no_document(id: Int) -> String {
+  "No document " <> int.to_string(id) <> "."
 }
 
 /// Items (open or closed) that link to a document, newest first.
@@ -670,6 +669,9 @@ pub fn items_with_doc(state: State, doc_id: Int) -> List(Item) {
 pub type NewDocument {
   NewDocument(
     title: String,
+    /// for a new document (see `model.doc_slug`); a new version keeps the
+    /// document's slug
+    slug: String,
     files: List(DocFile),
     storage_key: String,
     /// replace this document, which must still be at this revision, instead
@@ -698,6 +700,7 @@ pub fn put_document(
       let doc =
         Document(
           id:,
+          slug: new.slug,
           agent: agent_id,
           updated_by: agent_id,
           title: new.title,
@@ -739,11 +742,7 @@ pub fn put_document(
 }
 
 fn doc_event(doc: Document) -> String {
-  model.doc_ref(doc.id)
-  <> " v"
-  <> int.to_string(doc.version)
-  <> ": "
-  <> doc.title
+  model.doc_ref(doc) <> " v" <> int.to_string(doc.version) <> ": " <> doc.title
 }
 
 /// Delete a document (any agent or human may); items that linked to it lose
@@ -770,7 +769,7 @@ pub fn delete_document(
       actor,
       None,
       "doc_deleted",
-      model.doc_ref(id) <> ": " <> doc.title,
+      model.doc_ref(doc) <> ": " <> doc.title,
     )
   Ok(#(state, doc))
 }
@@ -808,7 +807,7 @@ pub fn share_document(
       }
   }
   case get_document(state, id), by {
-    None, _ -> Error("No document " <> model.doc_ref(id) <> ".")
+    None, _ -> Error(no_document(id))
     _, Error(reason) -> Error(reason)
     Some(Document(public: Some(_), ..) as doc), _ -> Ok(#(state, doc))
     Some(doc), Ok(#(user, agent)) -> {
@@ -824,7 +823,7 @@ pub fn share_document(
           sharer_actor(sharer),
           None,
           "doc_shared",
-          model.doc_ref(id) <> ": " <> doc.title,
+          model.doc_ref(doc) <> ": " <> doc.title,
         )
       Ok(#(state, doc))
     }
@@ -840,7 +839,7 @@ pub fn unshare_document(
   now: Int,
 ) -> Result(#(State, Document), String) {
   case get_document(state, id) {
-    None -> Error("No document " <> model.doc_ref(id) <> ".")
+    None -> Error(no_document(id))
     Some(Document(public: None, ..) as doc) -> Ok(#(state, doc))
     Some(doc) -> {
       let doc = Document(..doc, public: None)
@@ -851,7 +850,7 @@ pub fn unshare_document(
           sharer_actor(sharer),
           None,
           "doc_unshared",
-          model.doc_ref(id) <> ": " <> doc.title,
+          model.doc_ref(doc) <> ": " <> doc.title,
         )
       Ok(#(state, doc))
     }

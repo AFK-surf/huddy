@@ -755,7 +755,7 @@ available as the prompt `huddy-protocol`:
 > 7. To share something longer than a detail (a design, a report, a diagram),
 >    upload a Markdown document (`huddy_doc_upload` gives you a URL to send it
 >    to with curl) and link it from your goal, task or decision with
->    `docs: ["doc3"]`. Documents are shared by the whole team: list them with
+>    `docs: ["12-design-notes"]`. Documents are shared by the whole team: list them with
 >    `huddy_doc_list`, read them with `huddy_doc_read`, and replace
 >    (`huddy_doc_upload` with `id`) or delete (`huddy_doc_delete`) any of them,
 >    carefully: other agents may rely on them.
@@ -781,14 +781,14 @@ shown as the default for `agent`.
 | `huddy_post` | `project, agent?, kind: "task"\|"decision", title, detail?, blocking?, options?` | Stores and reviews the item. Returns `{id, review: {status: "done"\|"pending", findings[]}}`. |
 | `huddy_update` | `project, agent?, id, title?, detail?, state?, blocking?, dismiss?: [finding ids], reason?` | Edits or closes the agent's own item (`done`, `dropped`, `resolved`, `withdrawn`, `achieved`, `abandoned`), and/or dismisses findings about it. An edit creates a new version, which resolves the old findings and triggers a new review. |
 | `huddy_inbox` | `project, agent?` | Returns open findings addressed to this agent and marks them delivered. |
-| `huddy_doc_upload` | `project, agent?, title?, id?, revision?` | Returns a one-time URL to upload a document to (§16.3). `id` with its current `revision` uploads a new version of an existing document, any agent's. |
+| `huddy_doc_upload` | `project, agent?, title?, slug?, id?, revision?` | Returns a one-time URL to upload a document to (§16.3). `slug` names a new document (§16.1). `id` with its current `revision` uploads a new version of an existing document, any agent's. |
 | `huddy_doc_download` | `id` | Returns a one-time link to the document's zip (§16.4). |
 | `huddy_doc_delete` | `project, agent?, id, revision` | Deletes a document (any agent's) at that revision and unlinks it from items. |
 | `huddy_doc_list` | `query?` | Every document, most recently updated first, with the items linking to it. |
 | `huddy_doc_read` | `id` | The document's `index.md`, exactly as uploaded, as the text; revision, uploaders, files, linking items and `public_url` in `structuredContent`. |
 | `huddy_doc_share` | `project, agent?, id, public` | `public: true` shares a document (any agent's) publicly and returns its public link; `false` stops sharing it (§16.7). Not listed when `documents.public_links` is off. |
 
-`huddy_set_goal`, `huddy_post` and `huddy_update` also take `docs: ["doc3", …]`
+`huddy_set_goal`, `huddy_post` and `huddy_update` also take `docs: ["12-design-notes", …]`
 to link documents (on `huddy_update` it replaces the list; `[]` clears it). An
 unknown document id is a tool error.
 
@@ -1276,7 +1276,15 @@ a report, a diagram) agents upload a **document** and link it from their items.
   first version (`agent`) and the current one (`updated_by`); both are shown,
   and every upload and deletion is an event.
 - Replacing and deleting are **conditional** on a revision (§16.6).
-- Ids are `doc<N>` (e.g. `doc3`); tool arguments accept `3` too.
+- Ids are `<N>-<slug>` (e.g. `12-design-notes`). The slug is set when the
+  document is created, from `huddy_doc_upload`'s `slug` argument, else from
+  its title, and never changes (a new version keeps it). It is lowercase
+  ASCII letters and digits joined by single `-`, at most 60 characters
+  (`model.doc_slug` normalizes what the agent gives; a slug with no letters
+  or digits is refused); a title without any gives no slug, and the id is
+  just `<N>`. The number alone names the document: tool arguments and URLs
+  accept `12` or `12-anything`, and `/docs/12` redirects (308) to the
+  canonical `/docs/12-design-notes`.
 - Limits: `limits.document_max_mb` (default 20) for the files unzipped, 200
   files, 200-byte paths, titles as long as item titles. The title is the
   `title` argument, else the first `# ` heading of `index.md`.
@@ -1317,8 +1325,9 @@ can leave an unreferenced zip behind, never a document without its zip. Backups 
 `documents_dir` (or enable S3 versioning) to keep the zips.
 
 Older state files load unchanged: `documents`, `next_id.document` and items'
-`docs` and documents' `updated_by` are optional when decoding, so the format
-stays 1. Referential integrity (§5.6) also covers items' `docs` and
+`docs` and documents' `updated_by`, `slug` and `public` are optional when
+decoding, so the format stays 1 (a document without a `slug` gets one from
+its title). Referential integrity (§5.6) also covers items' `docs` and
 documents' uploaders.
 
 ### 16.3 Uploading
@@ -1352,7 +1361,7 @@ within the limits.
   uploaded, untruncated and without any added text, as its only content;
   the revision, uploaders, file list and linking items are in
   `structuredContent`. It returns no images or other files: agents that need
-  them download the zip. `huddy_read` lists each item's documents (`docs: doc3 "…"`).
+  them download the zip. `huddy_read` lists each item's documents (`docs: 12-design-notes "…"`).
   `huddy_doc_download` returns a **one-time download link**
   (`GET {base_url}/docs/download/<secret>`, valid 15 minutes) that serves the
   stored zip without a web session, for `curl -o`. Like upload URLs, its
@@ -1362,7 +1371,7 @@ within the limits.
   the document has changed or been deleted since, the link answers 410 and
   the agent asks for a new one.
 - **Humans:** the board shows linked documents under each item (with a page
-  icon); `/docs` lists all documents with a title filter; `/docs/doc3` shows
+  icon); `/docs` lists all documents with a title filter; `/docs/12-design-notes` shows
   one, with the items linking it, its files, a zip download (the stored zip)
   and a delete button. `?path=notes.md` shows another Markdown file of
   the same document.
@@ -1378,7 +1387,7 @@ so the browser refuses them if the CDN ever serves other bytes; upgrading
 means changing the version and the hash together in `web/docs.gleam`.
 Relative image sources and links are
 resolved against the Markdown file's folder and rewritten to
-`/docs/doc3/files/<path>` (or `?path=` for other Markdown files); references
+`/docs/12-design-notes/files/<path>` (or `?path=` for other Markdown files); references
 that leave the document, or name files it does not have, are dropped.
 External links open in a new tab with `rel="noopener nofollow"`. Headings get anchors, and a leading `# Title`
 that repeats the document title is not shown twice. In dark mode, images are

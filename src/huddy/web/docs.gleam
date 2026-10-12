@@ -44,7 +44,22 @@ pub fn handle(
   let rest = list.map(rest, fn(s) { uri.percent_decode(s) |> result.unwrap(s) })
   case rest, req.method {
     [], http.Get -> list_page(ctx, req, user)
-    [ref], http.Get -> with_doc(ctx, ref, show(ctx, req, Member, _))
+    [ref], http.Get ->
+      with_doc(ctx, ref, fn(doc) {
+        // the canonical URL names the document's slug too
+        case model.doc_ref(doc) == ref {
+          True -> show(ctx, req, Member, doc)
+          False ->
+            wisp.permanent_redirect(
+              "/docs/"
+              <> model.doc_ref(doc)
+              <> case req.query {
+                Some(q) -> "?" <> q
+                None -> ""
+              },
+            )
+        }
+      })
     [ref, "files", ..path], http.Get ->
       with_doc(ctx, ref, file(ctx, _, string.join(path, "/"), Member))
     [ref, "download"], http.Get -> with_doc(ctx, ref, download(ctx, _))
@@ -82,7 +97,7 @@ pub fn handle_public(
 
 /// Who is looking at a document page.
 type Viewer {
-  /// a signed-in member of the team, at `/docs/doc3`
+  /// a signed-in member of the team, at `/docs/12-design-notes`
   Member
   /// anyone with the public link `/shared/<token>`
   Public(token: String)
@@ -91,7 +106,7 @@ type Viewer {
 /// Where the document's page lives for this viewer; its files are under it.
 fn base(viewer: Viewer, doc: Document) -> String {
   case viewer {
-    Member -> "/docs/" <> model.doc_ref(doc.id)
+    Member -> "/docs/" <> model.doc_ref(doc)
     Public(token) -> "/shared/" <> token
   }
 }
@@ -116,7 +131,7 @@ fn public_headers(resp: wisp.Response) -> wisp.Response {
 }
 
 fn find(ctx: Ctx, ref: String) -> Option(Document) {
-  case model.parse_ref(ref, "doc") {
+  case model.parse_doc_ref(ref) {
     Ok(id) -> store.read(ctx.store, fn(s, _) { state.get_document(s, id) })
     Error(_) -> None
   }
@@ -293,7 +308,7 @@ fn list_page(ctx: Ctx, req: wisp.Request, _user: User) -> wisp.Response {
             [html.class("doclist")],
             list.map(docs, fn(entry) {
               let #(d, label, links) = entry
-              let ref = model.doc_ref(d.id)
+              let ref = model.doc_ref(d)
               html.el("li", [html.class("docrow")], [
                 html.raw(sketch.icon(sketch.DocIcon, ref)),
                 html.div([], [
@@ -336,7 +351,7 @@ fn show(
   doc: Document,
 ) -> wisp.Response {
   let now = sys.now_ms()
-  let ref = model.doc_ref(doc.id)
+  let ref = model.doc_ref(doc)
   let base = base(viewer, doc)
   let nav = viewer == Member
   let query = wisp.get_query(req)
@@ -499,7 +514,7 @@ fn sharing(
   doc: Document,
   now: Int,
 ) -> Node {
-  let ref = model.doc_ref(doc.id)
+  let ref = model.doc_ref(doc)
   let flash = fn(key, text) {
     html.when(list.key_find(query, key) |> result.is_ok, fn() {
       layout.notice(text)
@@ -561,7 +576,7 @@ fn download_button(base: String, ref: String) -> Node {
 }
 
 fn delete_form(doc: Document) -> Node {
-  let ref = model.doc_ref(doc.id)
+  let ref = model.doc_ref(doc)
   html.el("details", [html.class("hide")], [
     html.el("summary", [], [html.text("delete")]),
     html.post_form(
@@ -687,7 +702,7 @@ fn download(ctx: Ctx, doc: Document) -> wisp.Response {
   case documents.zip(ctx, doc) {
     Error(reason) -> {
       wisp.log_error(
-        "documents: cannot zip " <> model.doc_ref(doc.id) <> ": " <> reason,
+        "documents: cannot zip " <> model.doc_ref(doc) <> ": " <> reason,
       )
       wisp.internal_server_error()
     }
@@ -697,7 +712,7 @@ fn download(ctx: Ctx, doc: Document) -> wisp.Response {
       |> wisp.set_header("content-type", "application/zip")
       |> wisp.set_header(
         "content-disposition",
-        "attachment; filename=\"" <> model.doc_ref(doc.id) <> ".zip\"",
+        "attachment; filename=\"" <> model.doc_ref(doc) <> ".zip\"",
       )
       |> wisp.set_header("cache-control", "private, no-store")
   }
@@ -709,7 +724,7 @@ fn delete(
   user: User,
   ref: String,
 ) -> wisp.Response {
-  case session.same_origin(ctx, req), model.parse_ref(ref, "doc") {
+  case session.same_origin(ctx, req), model.parse_doc_ref(ref) {
     False, _ -> wisp.bad_request("cross-origin request")
     _, Error(_) -> wisp.not_found()
     True, Ok(id) -> {
@@ -743,7 +758,7 @@ fn share(
   case
     session.same_origin(ctx, req),
     ctx.config.documents.public_links,
-    model.parse_ref(ref, "doc")
+    model.parse_doc_ref(ref)
   {
     False, _, _ -> wisp.bad_request("cross-origin request")
     _, False, _ | _, _, Error(_) -> wisp.not_found()
@@ -753,10 +768,10 @@ fn share(
         False -> documents.unshare(ctx, id, state.ByUser(user.id))
       }
       case result {
-        Ok(_) ->
+        Ok(doc) ->
           wisp.redirect(
             "/docs/"
-            <> model.doc_ref(id)
+            <> model.doc_ref(doc)
             <> case public {
               True -> "?shared=1"
               False -> "?unshared=1"
@@ -815,7 +830,7 @@ fn serve_download(ctx: Ctx, secret: String) -> Response(mist.ResponseData) {
               |> response.set_header(
                 "content-disposition",
                 "attachment; filename=\""
-                  <> model.doc_ref(doc.id)
+                  <> model.doc_ref(doc)
                   <> "-r"
                   <> int.to_string(doc.version)
                   <> ".zip\"",
@@ -843,7 +858,8 @@ fn serve_download(ctx: Ctx, secret: String) -> Response(mist.ResponseData) {
             #(
               "error",
               json.string(
-                model.doc_ref(d.doc.id)
+                "Document "
+                <> int.to_string(d.doc.id)
                 <> " has changed or been deleted since this link was issued; ask huddy_doc_download for a new one.",
               ),
             ),
@@ -931,6 +947,7 @@ pub fn upload(
                       u.agent,
                       _,
                       u.title,
+                      u.slug,
                       u.replaces,
                     ))
                   case result {

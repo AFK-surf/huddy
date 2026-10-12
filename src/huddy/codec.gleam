@@ -182,6 +182,7 @@ pub fn encode_item(i: Item) -> Json {
 pub fn encode_document(d: Document) -> Json {
   json.object([
     #("id", json.int(d.id)),
+    #("slug", json.string(d.slug)),
     #("agent", json.int(d.agent)),
     #("updated_by", json.int(d.updated_by)),
     #("title", json.string(d.title)),
@@ -527,6 +528,12 @@ pub fn document_decoder() -> Decoder(Document) {
   use agent <- decode.field("agent", decode.int)
   use updated_by <- decode.optional_field("updated_by", agent, decode.int)
   use title <- decode.field("title", decode.string)
+  // documents from before slugs get one from their title
+  use slug <- decode.optional_field(
+    "slug",
+    model.doc_slug(title),
+    decode.string,
+  )
   use files <- decode.field(
     "files",
     decode.list({
@@ -558,6 +565,7 @@ pub fn document_decoder() -> Decoder(Document) {
   )
   decode.success(Document(
     id:,
+    slug:,
     agent:,
     updated_by:,
     title:,

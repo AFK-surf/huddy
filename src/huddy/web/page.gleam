@@ -479,7 +479,7 @@ fn doc_links(v: ItemView) -> Node {
       html.div(
         [html.class("docs")],
         list.map(docs, fn(d) {
-          let ref = model.doc_ref(d.0)
+          let ref = d.0
           html.a("/docs/" <> ref, [html.class("doclink")], [
             icon(sketch.DocIcon, ref),
             html.text(d.1),

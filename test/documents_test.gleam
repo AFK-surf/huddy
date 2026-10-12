@@ -134,6 +134,7 @@ fn at(id: Int, revision: Int) -> model.DocRevision {
 fn new_doc(title: String, replaces) -> state.NewDocument {
   state.NewDocument(
     title:,
+    slug: model.doc_slug(title),
     files: [
       model.DocFile("index.md", 10, "index.md"),
       model.DocFile("img/a.png", 5, "img/a.png"),
@@ -149,7 +150,7 @@ pub fn any_agent_can_version_a_document_test() {
     state.put_document(s, a, new_doc("v1", None), now)
   assert doc.version == 1
   assert doc.size == 15
-  assert model.doc_ref(doc.id) == "doc1"
+  assert model.doc_ref(doc) == "1-v1"
   let assert Ok(#(s, doc2, Some("key-v1"))) =
     state.put_document(s, a, new_doc("v2", Some(at(doc.id, 1))), now + 1)
   assert doc2.id == doc.id
@@ -166,7 +167,7 @@ pub fn any_agent_can_version_a_document_test() {
   // a change based on an older revision is refused
   let assert Error(message) =
     state.put_document(s, a, new_doc("stale", Some(at(doc.id, 2))), now)
-  assert string.contains(message, "doc1 is at revision 3, not 2")
+  assert string.contains(message, "1-v1 is at revision 3, not 2")
   let assert Error(_) = state.delete_document(s, at(doc.id, 1), "agent:1", now)
   let assert Error(_) =
     state.put_document(s, a, new_doc("x", Some(at(99, 1))), now)
@@ -188,7 +189,7 @@ pub fn items_link_documents_test() {
   assert t.docs == [doc.id]
   assert state.check_docs(s, [doc.id]) == Ok(Nil)
   let assert Error(message) = state.check_docs(s, [doc.id, 42])
-  assert string.contains(message, "doc42")
+  assert string.contains(message, "No document 42.")
   let assert Error(_) =
     state.edit_item(
       s,
@@ -306,7 +307,41 @@ pub fn sharing_a_document_publicly_test() {
   let assert Ok(loaded) = persist.decode_file(persist.encode(s, now), "test")
   assert loaded.documents == s.documents
   assert state.share_document(s, 42, state.ByUser(1), "n", now)
-    == Error("No document doc42.")
+    == Error("No document 42.")
+}
+
+pub fn document_refs_test() {
+  assert model.doc_slug("Design Notes: v2 (draft)") == "design-notes-v2-draft"
+  assert model.doc_slug("  --Hello__World--  ") == "hello-world"
+  assert model.doc_slug("Ünïcode ünd so") == "n-code-nd-so"
+  assert model.doc_slug("设计") == ""
+  assert string.length(model.doc_slug(string.repeat("ab ", 50)))
+    <= model.doc_slug_max
+  assert !string.ends_with(model.doc_slug(string.repeat("abcde ", 20)), "-")
+  assert model.parse_doc_ref("12-design-notes") == Ok(12)
+  assert model.parse_doc_ref(" 12 ") == Ok(12)
+  assert model.parse_doc_ref("12-anything-else") == Ok(12)
+  assert model.parse_doc_ref("doc12") == Error(Nil)
+  assert model.parse_doc_ref("-12") == Error(Nil)
+  assert model.parse_doc_ref("0-zero") == Error(Nil)
+  assert model.parse_doc_ref("design-notes") == Error(Nil)
+  let #(s, a, _) = support.two_agents(now)
+  let assert Ok(#(s, doc, _)) =
+    state.put_document(
+      s,
+      a,
+      state.NewDocument(..new_doc("设计", None), slug: ""),
+      now,
+    )
+  // no slug: the number alone
+  assert model.doc_ref(doc) == "1"
+  // a new version keeps the slug
+  let assert Ok(#(s, doc, _)) =
+    state.put_document(s, a, new_doc("Plan", None), now)
+  let assert Ok(#(_, v2, _)) =
+    state.put_document(s, a, new_doc("Renamed", Some(at(doc.id, 1))), now)
+  assert model.doc_ref(v2) == "2-plan"
+  assert v2.title == "Renamed"
 }
 
 pub fn files_written_before_documents_existed_still_load_test() {

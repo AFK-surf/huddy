@@ -840,7 +840,7 @@ pub fn documents_flow_test() {
   assert resp.status == 200
   assert string.contains(
     resp.body,
-    "Stored doc1 revision 1 \\\"Design notes\\\"",
+    "Stored 1-design-notes revision 1 \\\"Design notes\\\"",
   )
 
   // a zip with an image, title given explicitly
@@ -850,13 +850,21 @@ pub fn documents_flow_test() {
       #("index.md", <<"# Ignored\n![arch](img/arch.png)":utf8>>),
       #("img/arch.png", png),
     ])
-  let resp = upload_doc(alice, [#("title", json.string("Architecture"))], zip)
+  let resp =
+    upload_doc(
+      alice,
+      [#("title", json.string("Architecture")), #("slug", json.string("Arch!"))],
+      zip,
+    )
   assert resp.status == 200
   assert string.contains(
     resp.body,
-    "Stored doc2 revision 1 \\\"Architecture\\\"",
+    "Stored 2-arch revision 1 \\\"Architecture\\\"",
   )
-  assert string.contains(resp.body, "\"url\":\"" <> base(ctx) <> "/docs/doc2\"")
+  assert string.contains(
+    resp.body,
+    "\"url\":\"" <> base(ctx) <> "/docs/2-arch\"",
+  )
 
   // a one-time download link serves the stored zip, without a web session
   let download_link = fn(id) {
@@ -867,27 +875,27 @@ pub fn documents_flow_test() {
     )
     |> structured(["download_url"])
   }
-  let link = download_link("doc2")
+  let link = download_link("2-arch")
   assert string.starts_with(link, base(ctx) <> "/docs/download/")
   let got = get_bits(link, "")
   assert got.status == 200
   assert got.body == zip
   assert response.get_header(got, "content-disposition")
-    == Ok("attachment; filename=\"doc2-r1.zip\"")
+    == Ok("attachment; filename=\"2-arch-r1.zip\"")
   assert get_bits(link, "").status == 404
-  // a link for revision 1 of doc1, used after doc1 changes below
-  let stale_link = download_link("doc1")
+  // a link for revision 1 of 1-design-notes, used after 1-design-notes changes below
+  let stale_link = download_link("1-design-notes")
 
   // everyone can list and read every document
   let resp = rpc(bob, [], call("huddy_doc_list", json.object([])))
   let text = tool_text(resp)
-  assert string.contains(text, "doc2 \"Architecture\" — alice/codex/huddy")
-  assert string.contains(text, "doc1 \"Design notes\"")
+  assert string.contains(text, "2-arch \"Architecture\" — alice/codex/huddy")
+  assert string.contains(text, "1-design-notes \"Design notes\"")
   let resp =
     rpc(
       bob,
       [],
-      call("huddy_doc_read", json.object([#("id", json.string("doc2"))])),
+      call("huddy_doc_read", json.object([#("id", json.string("2-arch"))])),
     )
   // exactly index.md, nothing else; the rest is structured
   assert tool_text(resp) == "# Ignored\n![arch](img/arch.png)"
@@ -926,7 +934,7 @@ pub fn documents_flow_test() {
       call(
         "huddy_doc_upload",
         json.object([
-          #("id", json.string("doc1")),
+          #("id", json.string("1-design-notes")),
           #("revision", json.int(revision)),
         ]),
       ),
@@ -936,25 +944,28 @@ pub fn documents_flow_test() {
     rpc(
       bob,
       [],
-      call("huddy_doc_upload", json.object([#("id", json.string("doc1"))])),
+      call(
+        "huddy_doc_upload",
+        json.object([#("id", json.string("1-design-notes"))]),
+      ),
     )
   assert is_error(resp)
   assert string.contains(tool_text(resp), "`revision` is required")
   assert is_error(replace_doc1(2))
   // two upload URLs for revision 1: the first upload wins, the second is
-  // refused because doc1 changed in between
+  // refused because 1-design-notes changed in between
   let first = structured(replace_doc1(1), ["result", "upload_url"])
   let second = structured(replace_doc1(1), ["result", "upload_url"])
   let resp = send(http.Post, first, [], "# Design notes v2")
   assert resp.status == 200
-  assert string.contains(resp.body, "Stored doc1 revision 2")
+  assert string.contains(resp.body, "Stored 1-design-notes revision 2")
   let resp = send(http.Post, second, [], "# Design notes v2 (lost update)")
   assert resp.status == 400
-  assert string.contains(resp.body, "doc1 is at revision 2, not 1")
+  assert string.contains(resp.body, "1-design-notes is at revision 2, not 1")
   let resp = rpc(alice, [], call("huddy_doc_list", json.object([])))
   assert string.contains(
     tool_text(resp),
-    "doc1 \"Design notes v2\" — alice/codex/huddy (revision 2 by bob/claude-code/api)",
+    "1-design-notes \"Design notes v2\" — alice/codex/huddy (revision 2 by bob/claude-code/api)",
   )
   assert get_bits(stale_link, "").status == 410
   let resp =
@@ -963,11 +974,40 @@ pub fn documents_flow_test() {
       [],
       call(
         "huddy_doc_upload",
-        json.object([#("id", json.string("doc42")), #("revision", json.int(1))]),
+        json.object([
+          #("id", json.string("42-nope")),
+          #("revision", json.int(1)),
+        ]),
       ),
     )
   assert is_error(resp)
-  assert string.contains(tool_text(resp), "No document doc42")
+  assert string.contains(tool_text(resp), "No document 42.")
+  // the slug is chosen when a document is created, and must have letters
+  let upload_with = fn(args) {
+    rpc(bob, [], call("huddy_doc_upload", json.object(args)))
+  }
+  let resp =
+    upload_with([
+      #("id", json.string("1-design-notes")),
+      #("revision", json.int(2)),
+      #("slug", json.string("renamed")),
+    ])
+  assert is_error(resp)
+  assert string.contains(
+    tool_text(resp),
+    "`slug` is set when a document is created",
+  )
+  let resp = upload_with([#("slug", json.string("!!!"))])
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "`slug` needs letters or digits")
+  // the old form is gone
+  let resp =
+    rpc(
+      bob,
+      [],
+      call("huddy_doc_read", json.object([#("id", json.string("doc1"))])),
+    )
+  assert is_error(resp)
 
   // items link documents, and the board shows them
   let resp =
@@ -979,7 +1019,7 @@ pub fn documents_flow_test() {
         json.object([
           #("kind", json.string("task")),
           #("title", json.string("Implement the architecture")),
-          #("docs", json.array(["doc2"], json.string)),
+          #("docs", json.array(["2-arch"], json.string)),
         ]),
       ),
     )
@@ -993,14 +1033,14 @@ pub fn documents_flow_test() {
         json.object([
           #("kind", json.string("task")),
           #("title", json.string("Broken link")),
-          #("docs", json.array(["doc99"], json.string)),
+          #("docs", json.array(["99-nope"], json.string)),
         ]),
       ),
     )
   assert is_error(resp)
-  assert string.contains(tool_text(resp), "No document doc99")
+  assert string.contains(tool_text(resp), "No document 99.")
   let resp = rpc(alice, [], call("huddy_read", json.object([])))
-  assert string.contains(tool_text(resp), "docs: doc2 \"Architecture\"")
+  assert string.contains(tool_text(resp), "docs: 2-arch \"Architecture\"")
 
   // a one-time upload URL
   let resp = rpc(alice, [], call("huddy_doc_upload", json.object([])))
@@ -1018,7 +1058,7 @@ pub fn documents_flow_test() {
       "# Uploaded with curl\n",
     )
   assert ok.status == 200
-  assert string.contains(ok.body, "Stored doc3 revision 1")
+  assert string.contains(ok.body, "Stored 3-uploaded-with-curl revision 1")
   let again = send(http.Post, url, [], "# Again")
   assert again.status == 404
 
@@ -1030,7 +1070,7 @@ pub fn documents_flow_test() {
       call(
         "huddy_doc_delete",
         json.object([
-          #("id", json.string("doc3")),
+          #("id", json.string("3-uploaded-with-curl")),
           #("revision", json.int(revision)),
         ]),
       ),
@@ -1038,8 +1078,14 @@ pub fn documents_flow_test() {
   }
   let resp = delete_doc3(2)
   assert is_error(resp)
-  assert string.contains(tool_text(resp), "doc3 is at revision 1, not 2")
-  assert string.contains(tool_text(delete_doc3(1)), "Deleted doc3")
+  assert string.contains(
+    tool_text(resp),
+    "3-uploaded-with-curl is at revision 1, not 2",
+  )
+  assert string.contains(
+    tool_text(delete_doc3(1)),
+    "Deleted 3-uploaded-with-curl",
+  )
   assert is_error(delete_doc3(1))
 
   // the web pages
@@ -1047,13 +1093,19 @@ pub fn documents_flow_test() {
   let get = fn(path) {
     send(http.Get, base(ctx) <> path, [#("cookie", cookie)], "")
   }
+  // the number alone (or a wrong slug) redirects to the canonical URL
+  let short = get("/docs/2?path=index.md")
+  assert short.status == 308
+  assert header(short, "location") == "/docs/2-arch?path=index.md"
+  assert header(get("/docs/2-wrong"), "location") == "/docs/2-arch"
+  assert get("/docs/doc2").status == 404
   let board = get("/")
-  assert string.contains(board.body, "/docs/doc2")
+  assert string.contains(board.body, "/docs/2-arch")
   assert string.contains(board.body, "Architecture")
   let list = get("/docs")
   assert list.status == 200
   assert string.contains(list.body, "Design notes")
-  let page = get("/docs/doc2")
+  let page = get("/docs/2-arch")
   assert page.status == 200
   // the renderer comes from the CDN, pinned by hash
   assert string.contains(
@@ -1065,29 +1117,29 @@ pub fn documents_flow_test() {
   assert string.contains(page.body, "![arch](img/arch.png)")
   assert string.contains(page.body, "/static/huddy-doc.js")
   assert string.contains(page.body, "Implement the architecture")
-  let image = get_bits(base(ctx) <> "/docs/doc2/files/img/arch.png", cookie)
+  let image = get_bits(base(ctx) <> "/docs/2-arch/files/img/arch.png", cookie)
   assert image.status == 200
   assert image.body == png
   assert response.get_header(image, "content-type") == Ok("image/png")
   let assert Ok("sandbox" <> _) =
     response.get_header(image, "content-security-policy")
-  assert get("/docs/doc2/files/nope.png").status == 404
-  assert get("/docs/doc2/files/../../huddy.json").status == 404
-  let download = get_bits(base(ctx) <> "/docs/doc2/download", cookie)
+  assert get("/docs/2-arch/files/nope.png").status == 404
+  assert get("/docs/2-arch/files/../../huddy.json").status == 404
+  let download = get_bits(base(ctx) <> "/docs/2-arch/download", cookie)
   assert download.status == 200
   assert response.get_header(download, "content-type") == Ok("application/zip")
   // the stored zip, exactly as uploaded
   assert download.body == zip
   // documents need a signed-in user
   let anonymous =
-    send(http.Get, base(ctx) <> "/docs/doc2/files/img/arch.png", [], "")
+    send(http.Get, base(ctx) <> "/docs/2-arch/files/img/arch.png", [], "")
   assert anonymous.status == 303
 
   // a human deletes a document: it is unlinked and its files are gone
   let deleted =
     send(
       http.Post,
-      base(ctx) <> "/docs/doc2/delete",
+      base(ctx) <> "/docs/2-arch/delete",
       [
         #("cookie", cookie),
         #("origin", base(ctx)),
@@ -1096,12 +1148,12 @@ pub fn documents_flow_test() {
       "revision=1",
     )
   assert deleted.status == 303
-  assert get("/docs/doc2").status == 404
+  assert get("/docs/2-arch").status == 404
   let resp = rpc(alice, [], call("huddy_read", json.object([])))
-  assert !string.contains(tool_text(resp), "doc2")
+  assert !string.contains(tool_text(resp), "2-arch")
   process.sleep(200)
-  // one zip per version: only doc1's current one is left (its revision 1,
-  // doc2 and doc3 are gone)
+  // one zip per version: only 1-design-notes's current one is left (its revision 1,
+  // 2-arch and 3-uploaded-with-curl are gone)
   let assert Ok([left]) = blob.list_dir(ctx.config.storage.documents_dir)
   assert string.ends_with(left, ".zip")
 }
@@ -1134,7 +1186,7 @@ pub fn public_sharing_test() {
       rpc(
         agent,
         [],
-        call("huddy_doc_read", json.object([#("id", json.string("doc1"))])),
+        call("huddy_doc_read", json.object([#("id", json.string("1-plan"))])),
       )
     json.parse(
       resp.body,
@@ -1148,13 +1200,13 @@ pub fn public_sharing_test() {
   // not shared: only the team can read it
   assert public_url() == Ok(None)
   let page =
-    send(http.Get, base(ctx) <> "/docs/doc1", [#("cookie", cookie)], "")
+    send(http.Get, base(ctx) <> "/docs/1-plan", [#("cookie", cookie)], "")
   assert string.contains(page.body, "share publicly")
   // sharing needs a same-origin form post
   let cross =
     send(
       http.Post,
-      base(ctx) <> "/docs/doc1/share",
+      base(ctx) <> "/docs/1-plan/share",
       [#("cookie", cookie), #("origin", "https://evil.example")],
       "",
     )
@@ -1162,22 +1214,22 @@ pub fn public_sharing_test() {
   assert public_url() == Ok(None)
 
   // a human shares it; the page shows the link, and agents see it
-  let shared = post("/docs/doc1/share")
+  let shared = post("/docs/1-plan/share")
   assert shared.status == 303
-  assert header(shared, "location") == "/docs/doc1?shared=1"
+  assert header(shared, "location") == "/docs/1-plan?shared=1"
   let assert Ok(Some(url)) = public_url()
   assert string.starts_with(url, base(ctx) <> "/shared/")
   let page =
     send(
       http.Get,
-      base(ctx) <> "/docs/doc1?shared=1",
+      base(ctx) <> "/docs/1-plan?shared=1",
       [#("cookie", cookie)],
       "",
     )
   assert string.contains(page.body, url)
   assert string.contains(page.body, "stop sharing")
   // sharing again keeps the same link
-  assert post("/docs/doc1/share").status == 303
+  assert post("/docs/1-plan/share").status == 303
   assert public_url() == Ok(Some(url))
   // the link's token is not in the state file
   let token = string.drop_start(url, string.length(base(ctx) <> "/shared/"))
@@ -1210,7 +1262,7 @@ pub fn public_sharing_test() {
   assert download.body == zip
   // a wrong token, or the rest of Huddy, is not public
   assert send(http.Get, base(ctx) <> "/shared/nope", [], "").status == 404
-  assert send(http.Get, base(ctx) <> "/docs/doc1", [], "").status == 303
+  assert send(http.Get, base(ctx) <> "/docs/1-plan", [], "").status == 303
 
   // a new version is what the link shows
   let resp =
@@ -1219,7 +1271,10 @@ pub fn public_sharing_test() {
       [],
       call(
         "huddy_doc_upload",
-        json.object([#("id", json.string("doc1")), #("revision", json.int(1))]),
+        json.object([
+          #("id", json.string("1-plan")),
+          #("revision", json.int(1)),
+        ]),
       ),
     )
   let upload = structured(resp, ["result", "upload_url"])
@@ -1229,13 +1284,13 @@ pub fn public_sharing_test() {
   assert string.contains(send(http.Get, url, [], "").body, "# Plan v2")
 
   // stopping sharing breaks the link for good
-  let unshared = post("/docs/doc1/unshare")
+  let unshared = post("/docs/1-plan/unshare")
   assert unshared.status == 303
-  assert header(unshared, "location") == "/docs/doc1?unshared=1"
+  assert header(unshared, "location") == "/docs/1-plan?unshared=1"
   assert public_url() == Ok(None)
   assert send(http.Get, url, [], "").status == 404
   assert get_bits(url <> "/download", "").status == 404
-  assert post("/docs/doc1/share").status == 303
+  assert post("/docs/1-plan/share").status == 303
   let assert Ok(Some(new_url)) = public_url()
   assert new_url != url
   assert send(http.Get, new_url, [], "").status == 200
@@ -1244,7 +1299,7 @@ pub fn public_sharing_test() {
   let deleted =
     send(
       http.Post,
-      base(ctx) <> "/docs/doc1/delete",
+      base(ctx) <> "/docs/1-plan/delete",
       [
         #("cookie", cookie),
         #("origin", base(ctx)),
@@ -1290,35 +1345,39 @@ pub fn agents_share_documents_test() {
   assert string.contains(tools.body, "\"name\":\"huddy_doc_share\"")
 
   // any agent can share any document, and gets its public link
-  let resp = share(bob, "doc1", True)
+  let resp = share(bob, "1-plan", True)
   assert !is_error(resp)
   let url = structured(resp, ["result", "public_url"])
   assert string.starts_with(url, base(ctx) <> "/shared/")
   assert string.contains(tool_text(resp), "is shared publicly: " <> url <> "\n")
   assert send(http.Get, url, [], "").status == 200
   // sharing again returns the same link
-  assert structured(share(alice, "doc1", True), ["result", "public_url"]) == url
+  assert structured(share(alice, "1-plan", True), [
+      "result",
+      "public_url",
+    ])
+    == url
   // humans see which agent shared it
   let page =
-    send(http.Get, base(ctx) <> "/docs/doc1", [#("cookie", cookie)], "")
+    send(http.Get, base(ctx) <> "/docs/1-plan", [#("cookie", cookie)], "")
   assert string.contains(page.body, "Shared by bob/claude-code/api")
 
   // and any agent can stop sharing it
-  let resp = share(alice, "doc1", False)
+  let resp = share(alice, "1-plan", False)
   assert !is_error(resp)
   assert string.contains(tool_text(resp), "no longer works")
   assert send(http.Get, url, [], "").status == 404
 
   // bad arguments
   assert string.contains(
-    tool_text(share(alice, "doc9", True)),
-    "No document doc9",
+    tool_text(share(alice, "9-nope", True)),
+    "No document 9.",
   )
   let resp =
     rpc(
       alice,
       [],
-      call("huddy_doc_share", json.object([#("id", json.string("doc1"))])),
+      call("huddy_doc_share", json.object([#("id", json.string("1-plan"))])),
     )
   assert is_error(resp)
   assert string.contains(tool_text(resp), "`public` is required")
@@ -1341,7 +1400,7 @@ pub fn agents_share_documents_test() {
         )
       store.Changed(s, e, [], Nil)
     })
-  let resp = share(base(ctx) <> "/mcp/k/" <> secret, "doc1", True)
+  let resp = share(base(ctx) <> "/mcp/k/" <> secret, "1-plan", True)
   assert is_error(resp)
   let assert Some(doc) =
     store.read(ctx.store, fn(s, _) { state.get_document(s, 1) })
@@ -1357,12 +1416,12 @@ pub fn public_links_can_be_turned_off_test() {
   assert upload_doc(agent, [], <<"# Plan\n":utf8>>).status == 200
   let cookie = web_session(ctx, "carol@acme.dev")
   let page =
-    send(http.Get, base(ctx) <> "/docs/doc1", [#("cookie", cookie)], "")
+    send(http.Get, base(ctx) <> "/docs/1-plan", [#("cookie", cookie)], "")
   assert !string.contains(page.body, "share publicly")
   let shared =
     send(
       http.Post,
-      base(ctx) <> "/docs/doc1/share",
+      base(ctx) <> "/docs/1-plan/share",
       [#("cookie", cookie), #("origin", base(ctx))],
       "",
     )
@@ -1385,7 +1444,10 @@ pub fn public_links_can_be_turned_off_test() {
       [],
       call(
         "huddy_doc_share",
-        json.object([#("id", json.string("doc1")), #("public", json.bool(True))]),
+        json.object([
+          #("id", json.string("1-plan")),
+          #("public", json.bool(True)),
+        ]),
       ),
     )
   assert is_error(resp)

@@ -310,26 +310,28 @@ const lock_timeout_ms = 120_000
 /// (`replaces`, which must still be at the given revision). A new version is
 /// stored on the document's actor (`huddy/doc_lock`), after any other change
 /// to it. The title is `title`, else the first `# ` heading of index.md,
-/// else (for a new version) the previous title.
+/// else (for a new version) the previous title. A new document's slug is
+/// `slug`, else made from its title; a new version keeps its slug.
 pub fn upload(
   ctx: Ctx,
   agent_id: Int,
   upload: Upload,
   title: Option(String),
+  slug: Option(String),
   replaces: Option(DocRevision),
 ) -> Result(Stored, UploadError) {
   use unpacked <- result.try(
     unpack(upload, max_bytes(ctx)) |> result.map_error(NotStored),
   )
   case replaces {
-    None -> store_version(ctx, agent_id, unpacked, title, None)
+    None -> store_version(ctx, agent_id, unpacked, title, slug, None)
     Some(at) ->
       doc_lock.run(ctx.doc_locks, at.id, lock_timeout_ms, fn() {
         // refuse a stale revision before writing any files; put_document
         // checks again when recording the change
         case store.read(ctx.store, fn(s, _) { state.check_revision(s, at) }) {
           Error(reason) -> Error(NotStored(reason))
-          Ok(_) -> store_version(ctx, agent_id, unpacked, title, Some(at))
+          Ok(_) -> store_version(ctx, agent_id, unpacked, title, None, Some(at))
         }
       })
       |> result.map_error(fn(failure) {
@@ -347,6 +349,7 @@ fn store_version(
   agent_id: Int,
   unpacked: Unpacked,
   title: Option(String),
+  slug: Option(String),
   replaces: Option(DocRevision),
 ) -> Result(Stored, UploadError) {
   let limit = ctx.config.limits.title_max_chars
@@ -405,6 +408,8 @@ fn store_version(
           agent_id,
           state.NewDocument(
             title:,
+            slug: option.map(slug, model.doc_slug)
+              |> option.unwrap(model.doc_slug(title)),
             files: doc_files,
             storage_key: key,
             replaces:,
@@ -495,8 +500,8 @@ pub fn read_file(
   }
 }
 
-pub fn url(ctx: Ctx, doc_id: Int) -> String {
-  ctx.config.base_url <> "/docs/" <> model.doc_ref(doc_id)
+pub fn url(ctx: Ctx, doc: Document) -> String {
+  ctx.config.base_url <> "/docs/" <> model.doc_ref(doc)
 }
 
 // --- public links ------------------------------------------------------------------

@@ -122,17 +122,20 @@ and any agent can replace or delete any of them.
   `(cd my-doc && zip -r - .) | curl --data-binary @- -H 'Content-Type: application/zip' <url>`
   (or a single `.md` file). The file never passes through the model. `id`
   uploads a new version of an existing document.
+- Document ids look like `12-design-notes`: a number and a slug, which the
+  agent picks with `slug` when it creates the document (else it comes from
+  the title). The number alone (`12`) works too.
 - `huddy_doc_delete` deletes one.
 - `huddy_doc_download` returns a one-time link to the document's zip, exactly
-  as uploaded, for `curl -o doc3.zip <link>`.
+  as uploaded, for `curl -o 12-design-notes.zip <link>`.
 - Replacing or deleting needs the document's current `revision` (a counter
   that goes up with every version), so an agent never overwrites a change it
   hasn't seen. Changes to one document run one at a time.
 - `huddy_doc_list` lists them; `huddy_doc_read` returns a document's raw
   `index.md` (revision, files and links are in the structured result).
-- Goals, tasks and decisions link documents with `docs: ["doc3"]`; the board
+- Goals, tasks and decisions link documents with `docs: ["12-design-notes"]`; the board
   shows the links.
-- `/docs` lists them for humans; `/docs/doc3` renders the Markdown in the
+- `/docs` lists them for humans; `/docs/12-design-notes` renders the Markdown in the
   browser. Humans can delete a document there.
 - Documents can be **shared publicly**, by a human from the document's
   page or by an agent with `huddy_doc_share`: anyone with the link
