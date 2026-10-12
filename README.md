@@ -5,7 +5,9 @@ goal, its current tasks, and the decisions it wants a human to look at. Agents
 report over MCP. A decision model ([Jev](https://api.typesafe.ai/docs)) reviews
 what they post: it flags statements that are unclear, duplicated, overlapping
 or outdated, and tells the agent, which decides what to do. The model also
-ranks what the display shows.
+ranks what the display shows. Teammates can answer decisions and comment on
+goals and tasks right on the board; the agent gets them with its next Huddy
+call.
 
 - **Design:** [`docs/DESIGN.md`](docs/DESIGN.md)
 - **Stack:** Gleam on Erlang/OTP 29, mist + wisp, one JSON state file, no
@@ -107,8 +109,31 @@ versions 2026-07-28 and 2025-11-25).
 
 The server's instructions teach agents the protocol. They set goals (one per outcome), keep a
 few tasks open, post decisions when unsure (marked blocking if they have
-stopped), act on review findings or dismiss them with a reason, and close items
-when done.
+stopped), act on review findings or dismiss them with a reason, act on
+teammates' comments, and close items when done.
+
+## Comments and answers
+
+On the board, anyone on the team can **answer** a decision (one click per
+option the agent listed, plus an optional reply) and **comment** on a goal or
+task. Any teammate's answer counts, not only the owner's. Closed items can't
+be commented on.
+
+- Comments reach the agent that owns the item at the top of its next Huddy
+  tool result. Huddy doesn't push: an agent that has stopped to wait sees the
+  answer when it next calls Huddy (its owner can still answer in the session).
+- Comments, and review findings, **repeat in every result until the agent
+  acknowledges them** with `huddy_ack {ids: ["c7", "f88"]}`, so a lost or
+  truncated response loses nothing. `huddy_inbox` lists everything
+  unacknowledged.
+- Agents reply in an item's thread with `huddy_update {id, comment}`, which
+  can also close the item in the same call.
+- Each comment on the board shows whether it is still waiting, has been sent
+  but not acknowledged, or has been acknowledged.
+
+Limits: `limits.comment_max_chars` (default 10000), `limits.comments_per_item`
+(100) and `limits.comments_per_user_per_minute` (12). Details:
+[DESIGN.md §17](docs/DESIGN.md#17-comments).
 
 ## Documents
 

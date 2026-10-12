@@ -31,7 +31,7 @@ import huddy/store
 import huddy/sys
 import support
 
-type Mail {
+pub type Mail {
   Mail(to: String, subject: String, body: String)
 }
 
@@ -54,7 +54,7 @@ fn fake_ask(_state: json.Json, questions: List(#(String, jev.Question))) {
   Ok(jev.Response(dict.from_list(answers), 100, 5, "{}"))
 }
 
-fn boot(port: Int) -> #(Ctx, Subject(Mail)) {
+pub fn boot(port: Int) -> #(Ctx, Subject(Mail)) {
   boot_with(port, fn(cfg) { cfg })
 }
 
@@ -75,11 +75,11 @@ fn boot_with(port: Int, tweak: fn(Config) -> Config) -> #(Ctx, Subject(Mail)) {
   #(ctx, mails)
 }
 
-fn base(ctx: Ctx) -> String {
+pub fn base(ctx: Ctx) -> String {
   ctx.config.base_url
 }
 
-fn send(
+pub fn send(
   method: http.Method,
   url: String,
   headers: List(#(String, String)),
@@ -101,7 +101,7 @@ fn header(resp: Response(String), name: String) -> String {
   response.get_header(resp, name) |> result.unwrap("")
 }
 
-fn rpc(
+pub fn rpc(
   url: String,
   extra: List(#(String, String)),
   payload: json.Json,
@@ -114,7 +114,7 @@ fn rpc(
   )
 }
 
-fn call(name: String, args: json.Json) -> json.Json {
+pub fn call(name: String, args: json.Json) -> json.Json {
   json.object([
     #("jsonrpc", json.string("2.0")),
     #("id", json.int(1)),
@@ -126,7 +126,7 @@ fn call(name: String, args: json.Json) -> json.Json {
   ])
 }
 
-fn tool_text(resp: Response(String)) -> String {
+pub fn tool_text(resp: Response(String)) -> String {
   let decoder =
     decode.at(
       ["result", "content"],
@@ -139,7 +139,7 @@ fn tool_text(resp: Response(String)) -> String {
 }
 
 /// A user plus a secret MCP URL created directly in the store.
-fn user_with_link(
+pub fn user_with_link(
   ctx: Ctx,
   email: String,
   pinned: Option(#(String, String)),
@@ -803,7 +803,7 @@ pub fn concurrent_writes_are_durable_test() {
 fn zip_create(files: List(#(String, BitArray))) -> Result(BitArray, String)
 
 /// A web session for a new user, as a Cookie header value.
-fn web_session(ctx: Ctx, email: String) -> String {
+pub fn web_session(ctx: Ctx, email: String) -> String {
   let token = sys.random_token(32)
   let assert Ok(_) =
     store.update(ctx.store, fn(s, e, now) {
@@ -815,7 +815,7 @@ fn web_session(ctx: Ctx, email: String) -> String {
   "huddy_session=" <> bit_array.base64_encode(<<token:utf8>>, False)
 }
 
-fn structured(resp: Response(String), path: List(String)) -> String {
+pub fn structured(resp: Response(String), path: List(String)) -> String {
   let assert Ok(value) =
     json.parse(
       resp.body,
@@ -824,7 +824,7 @@ fn structured(resp: Response(String), path: List(String)) -> String {
   value
 }
 
-fn is_error(resp: Response(String)) -> Bool {
+pub fn is_error(resp: Response(String)) -> Bool {
   let assert Ok(value) =
     json.parse(resp.body, decode.at(["result", "isError"], decode.bool))
   value

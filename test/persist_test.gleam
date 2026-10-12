@@ -57,6 +57,28 @@ fn sample_state() -> model.State {
       "huddy:read",
       now,
     )
+  let limits = state.CommentLimits(max_chars: 1000, per_item: 100)
+  let assert Ok(#(s, c)) =
+    state.add_comment(
+      s,
+      goal.id,
+      model.HumanAuthor(2),
+      "keep the \"old\" flow ✓",
+      None,
+      limits,
+      now,
+    )
+  let assert Ok(#(s, _)) =
+    state.add_comment(
+      s,
+      goal.id,
+      model.AgentAuthor(a),
+      "will do",
+      None,
+      limits,
+      now,
+    )
+  let s = state.mark_sent(s, [c.id], [], now + 1)
   s
 }
 
@@ -88,6 +110,36 @@ pub fn retired_findings_are_dropped_on_load_test() {
   let assert Ok(loaded) = json.parse(text, codec.state_decoder())
   assert dict.is_empty(loaded.findings)
   assert dict.size(loaded.items) == dict.size(s.items)
+}
+
+pub fn files_without_comments_or_acks_load_test() {
+  let s = sample_state()
+  assert dict.size(s.comments) == 2
+  // a file written before comments and acknowledgements existed
+  let text =
+    encoded(s)
+    |> string.replace(",\"acked_at\":null", "")
+    |> fn(t) {
+      let assert [before, _] = string.split(t, ",\"comments\":")
+      before <> "}"
+    }
+    |> string.replace(",\"comment\":3", "")
+    |> string.replace("\"status\":\"open\"", "\"status\":\"delivered\"")
+    |> string.replace("\"delivered_at\":null", "\"delivered_at\":1791622800000")
+  assert !string.contains(text, "acked_at")
+  assert !string.contains(text, "comments")
+  let assert Ok(loaded) = json.parse(text, codec.state_decoder())
+  assert dict.is_empty(loaded.comments)
+  assert loaded.next_id.comment == 1
+  // delivered under the old rules: counts as acknowledged
+  let assert [f] = dict.values(loaded.findings)
+  assert f.acked_at == Some(1_791_622_800_000)
+}
+
+pub fn dangling_comment_refuses_test() {
+  let s = sample_state()
+  let s = model.State(..s, items: dict.new(), findings: dict.new())
+  let assert Error(_) = codec.check_references(s)
 }
 
 pub fn missing_file_starts_empty_test() {

@@ -175,8 +175,37 @@ pub type Finding {
     status: FindingStatus,
     dismiss_reason: Option(String),
     created_at: Int,
+    /// first included in a tool result for the agent
     delivered_at: Option(Int),
+    /// the agent acknowledged it (`huddy_ack`, or a dismissal); it is then
+    /// no longer repeated in tool results, but stays live
+    acked_at: Option(Int),
     closed_at: Option(Int),
+  )
+}
+
+pub type CommentAuthor {
+  HumanAuthor(user: Int)
+  /// the item's own agent, replying in its thread
+  AgentAuthor(agent: Int)
+}
+
+/// A comment on an item: a human's answer or request, or the item's agent
+/// replying. A human comment is repeated in the agent's tool results until
+/// the agent acknowledges it.
+pub type Comment {
+  Comment(
+    id: Int,
+    item: Int,
+    author: CommentAuthor,
+    body: String,
+    /// decisions: the option the human picked
+    pick: Option(String),
+    created_at: Int,
+    /// human comments: last included in a tool result for the agent
+    sent_at: Option(Int),
+    /// human comments: the agent acknowledged it
+    acked_at: Option(Int),
   )
 }
 
@@ -283,6 +312,7 @@ pub type NextIds {
     link: Int,
     grant: Int,
     document: Int,
+    comment: Int,
   )
 }
 
@@ -303,13 +333,14 @@ pub type State {
     oauth_grants: Dict(Int, OAuthGrant),
     oauth_tokens: Dict(String, OAuthToken),
     documents: Dict(Int, Document),
+    comments: Dict(Int, Comment),
   )
 }
 
 pub fn empty_state() -> State {
   State(
     saved_at: 0,
-    next_id: NextIds(1, 1, 1, 1, 1, 1, 1, 1, 1),
+    next_id: NextIds(1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
     users: dict.new(),
     web_sessions: dict.new(),
     agents: dict.new(),
@@ -322,6 +353,7 @@ pub fn empty_state() -> State {
     oauth_grants: dict.new(),
     oauth_tokens: dict.new(),
     documents: dict.new(),
+    comments: dict.new(),
   )
 }
 
@@ -463,6 +495,10 @@ pub fn item_ref(id: Int) -> String {
 
 pub fn finding_ref(id: Int) -> String {
   "f" <> int.to_string(id)
+}
+
+pub fn comment_ref(id: Int) -> String {
+  "c" <> int.to_string(id)
 }
 
 /// A document as agents and URLs name it: "12-design-notes", or "12" when

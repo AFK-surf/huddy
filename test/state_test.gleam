@@ -174,22 +174,176 @@ pub fn agents_cannot_dismiss_others_findings_test() {
   let assert Error(_) = state.dismiss_findings(s, b, [f.id], "nope", now)
 }
 
-pub fn inbox_delivers_once_test() {
+pub fn findings_repeat_until_acked_test() {
   let #(s, a, _) = support.two_agents(now)
   let #(s, t) = state.create_item(s, a, support.task("Work"), now)
-  let assert #(s, Some(_)) =
+  let assert #(s, Some(f)) =
     state.add_finding(s, new_finding(a, t.id, 1, model.Unclear), now, 0)
-  let #(s, first) = state.take_inbox(s, a, now)
-  let #(_, second) = state.take_inbox(s, a, now)
-  assert list.length(first) == 1
-  assert second == []
+  let assert #(_, [first]) = state.unacked(s, a)
+  let s = state.mark_sent(s, [], [first.id], now)
+  // sent, but not acknowledged: still there
+  let assert #(_, [again]) = state.unacked(s, a)
+  assert again.id == f.id
+  assert again.status == model.Delivered
+  let assert Ok(s) = state.ack(s, a, [state.AckFinding(f.id)], now)
+  assert state.unacked(s, a) == #([], [])
+  // acked findings stay live for their display effects
+  let assert Ok(acked) = dict.get(s.findings, f.id)
+  assert model.finding_is_live(acked)
+  // acking again is fine
+  let assert Ok(_) = state.ack(s, a, [state.AckFinding(f.id)], now)
+}
+
+pub fn dismissing_acknowledges_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let #(s, t) = state.create_item(s, a, support.task("Work"), now)
+  let assert #(s, Some(f)) =
+    state.add_finding(s, new_finding(a, t.id, 1, model.Unclear), now, 0)
+  let assert Ok(s) = state.dismiss_findings(s, a, [f.id], "fine", now)
+  let assert Ok(d) = dict.get(s.findings, f.id)
+  assert d.acked_at == Some(now)
+  assert state.unacked(s, a) == #([], [])
+}
+
+pub fn agents_cannot_ack_others_entries_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, t) = state.create_item(s, a, support.task("Work"), now)
+  let assert #(s, Some(f)) =
+    state.add_finding(s, new_finding(a, t.id, 1, model.Unclear), now, 0)
+  let assert Ok(#(s, c)) =
+    state.add_comment(s, t.id, model.HumanAuthor(2), "hi", None, limits, now)
+  let assert Error(_) = state.ack(s, b, [state.AckFinding(f.id)], now)
+  let assert Error(_) = state.ack(s, b, [state.AckComment(c.id)], now)
+  let assert Error(_) = state.ack(s, a, [state.AckComment(999)], now)
+  // all or nothing
+  let assert Error(_) =
+    state.ack(s, a, [state.AckComment(c.id), state.AckFinding(999)], now)
+  let assert Ok(_) =
+    state.ack(s, a, [state.AckComment(c.id), state.AckFinding(f.id)], now)
+  assert state.parse_ack_ref("c7") == Ok(state.AckComment(7))
+  assert state.parse_ack_ref(" f88 ") == Ok(state.AckFinding(88))
+  let assert Error(_) = state.parse_ack_ref("88")
+  let assert Error(_) = state.parse_ack_ref("i41")
+}
+
+const limits = state.CommentLimits(max_chars: 20, per_item: 3)
+
+pub fn comments_are_checked_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, t) = state.create_item(s, a, support.task("Work"), now)
+  let #(s, d) =
+    state.create_item(
+      s,
+      a,
+      state.NewItem(model.Decision, "Which?", "", True, ["SES", "Postmark"], []),
+      now,
+    )
+  let human = model.HumanAuthor(2)
+  let assert Error(_) =
+    state.add_comment(s, t.id, human, "  ", None, limits, now)
+  let assert Error(_) =
+    state.add_comment(s, t.id, human, string.repeat("x", 21), None, limits, now)
+  // picks: decisions only, and only a current option
+  let assert Error(_) =
+    state.add_comment(s, t.id, human, "", Some("SES"), limits, now)
+  let assert Error(_) =
+    state.add_comment(s, d.id, human, "", Some("Mailgun"), limits, now)
+  let assert Error(_) =
+    state.add_comment(
+      s,
+      d.id,
+      model.AgentAuthor(a),
+      "",
+      Some("SES"),
+      limits,
+      now,
+    )
+  // an agent replies only on its own items
+  let assert Error(_) =
+    state.add_comment(s, t.id, model.AgentAuthor(b), "mine?", None, limits, now)
+  let assert Ok(#(s, c)) =
+    state.add_comment(s, d.id, human, "", Some("Postmark"), limits, now)
+  assert c.pick == Some("Postmark")
+  // answering marks the decision seen
+  let assert Some(seen) = state.get_item(s, d.id)
+  assert seen.seen_by == Some(2)
+  // at most `per_item`
+  let assert Ok(#(s, _)) =
+    state.add_comment(s, t.id, human, "1", None, limits, now)
+  let assert Ok(#(s, _)) =
+    state.add_comment(s, t.id, model.AgentAuthor(a), "2", None, limits, now)
+  let assert Ok(#(s, _)) =
+    state.add_comment(s, t.id, human, "3", None, limits, now)
+  let assert Error(_) =
+    state.add_comment(s, t.id, human, "4", None, limits, now)
+  // closed items take no comments
+  let assert Ok(#(s, _)) =
+    state.edit_item(
+      s,
+      a,
+      d.id,
+      state.Edit(None, None, None, None, Some(model.Resolved), None),
+      now,
+    )
+  let assert Error(_) =
+    state.add_comment(s, d.id, human, "late", None, limits, now)
+}
+
+pub fn comments_repeat_until_acked_even_after_close_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let #(s, t) = state.create_item(s, a, support.task("Work"), now)
+  let assert Ok(#(s, c)) =
+    state.add_comment(s, t.id, model.HumanAuthor(2), "wait", None, limits, now)
+  // the agent's own replies are not addressed to it
+  let assert Ok(#(s, _)) =
+    state.add_comment(s, t.id, model.AgentAuthor(a), "ok", None, limits, now)
+  let assert #([pending], []) = state.unacked(s, a)
+  assert pending.id == c.id
+  let s = state.mark_sent(s, [c.id], [], now + 1)
+  let assert Ok(#(s, _)) =
+    state.edit_item(
+      s,
+      a,
+      t.id,
+      state.Edit(
+        Some("Work, renamed"),
+        None,
+        None,
+        None,
+        Some(model.Done),
+        None,
+      ),
+      now + 2,
+    )
+  let assert #([still], []) = state.unacked(s, a)
+  assert still.sent_at == Some(now + 1)
+  let assert Ok(s) = state.ack(s, a, [state.AckComment(c.id)], now + 3)
+  assert state.unacked(s, a) == #([], [])
+}
+
+pub fn pruning_drops_comments_with_their_item_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let #(s, t) = state.create_item(s, a, support.task("Work"), now)
+  let assert Ok(#(s, _)) =
+    state.add_comment(s, t.id, model.HumanAuthor(2), "x", None, limits, now)
+  let assert Ok(#(s, _)) =
+    state.edit_item(
+      s,
+      a,
+      t.id,
+      state.Edit(None, None, None, None, Some(model.Done), None),
+      now,
+    )
+  let later = now + state.days(31)
+  let s = state.prune(s, state.RetentionPolicy(30, 90, 14, 90, 0), later)
+  assert dict.size(s.comments) == 0
 }
 
 pub fn hiding_tells_the_agent_test() {
   let #(s, a, _) = support.two_agents(now)
   let #(s, t) = state.create_item(s, a, support.task("Work"), now)
   let assert Ok(s) = state.hide(s, t.id, 2, "superseded", now)
-  let #(_, inbox) = state.take_inbox(s, a, now)
+  let #(_, inbox) = state.unacked(s, a)
   let assert [f] = inbox
   assert f.kind == model.Hidden
   assert string.contains(f.message, "bob hid")

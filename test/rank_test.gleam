@@ -1,6 +1,6 @@
 import gleam/int
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/set
 import gleam/string
 import huddy/config
@@ -150,4 +150,31 @@ pub fn hide_away_drops_away_agents_but_keeps_their_blockers_test() {
   assert active.decisions == []
   assert active.goals == []
   assert titles(active.blocking) == ["Away blocker"]
+}
+
+pub fn answered_blockers_sort_after_unanswered_test() {
+  let #(s, a, _) = support.two_agents(now)
+  let #(s, d1) =
+    state.create_item(s, a, support.decision("oldest", True), now - 3000)
+  let #(s, d2) =
+    state.create_item(s, a, support.decision("seen", True), now - 2000)
+  let #(s, _) = state.create_item(s, a, support.decision("new", True), now)
+  let assert Ok(s) = state.mark_seen(s, d2.id, 2, now)
+  let assert Ok(#(s, _)) =
+    state.add_comment(
+      s,
+      d1.id,
+      model.HumanAuthor(2),
+      "do it",
+      None,
+      state.CommentLimits(1000, 100),
+      now,
+    )
+  let #(view, _) = compute(s, display(3, 3), rank.no_visible())
+  assert titles(view.blocking) == ["new", "seen", "oldest"]
+  let assert [_, _, answered] = view.blocking
+  assert answered.answered == Some(#("bob", now))
+  let assert [c] = answered.comments
+  assert c.author == "bob"
+  assert !c.by_agent
 }

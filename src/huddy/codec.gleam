@@ -1,6 +1,7 @@
 //// JSON encoding/decoding of `State` for the storage file (format 1).
-//// Fields added since format 1 was introduced (`documents`, item `docs`)
-//// are optional when decoding, so older files load unchanged.
+//// Fields added since format 1 was introduced (`documents`, item `docs`,
+//// `comments`, finding `acked_at`) are optional when decoding, so older
+//// files load unchanged.
 
 import gleam/dict
 import gleam/dynamic/decode.{type Decoder}
@@ -8,12 +9,13 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import huddy/model.{
-  type Agent, type Document, type Event, type Finding, type Item, type Judgment,
-  type McpLink, type NextIds, type OAuthClient, type OAuthGrant, type OAuthToken,
-  type State, type User, type WebSession, Agent, DocFile, Document, Event,
-  Finding, Item, Judgment, McpLink, NextIds, OAuthClient, OAuthGrant, OAuthToken,
-  PublicLink, State, User, WebSession,
+  type Agent, type Comment, type Document, type Event, type Finding, type Item,
+  type Judgment, type McpLink, type NextIds, type OAuthClient, type OAuthGrant,
+  type OAuthToken, type State, type User, type WebSession, Agent, Comment,
+  DocFile, Document, Event, Finding, Item, Judgment, McpLink, NextIds,
+  OAuthClient, OAuthGrant, OAuthToken, PublicLink, State, User, WebSession,
 }
 
 pub const format = 1
@@ -100,6 +102,13 @@ pub fn encode_state(state: State, saved_at: Int) -> Json {
         encode_document,
       ),
     ),
+    #(
+      "comments",
+      json.array(
+        dict.values(state.comments) |> sort_by(fn(c) { c.id }),
+        encode_comment,
+      ),
+    ),
   ])
 }
 
@@ -118,6 +127,7 @@ fn encode_next_ids(n: NextIds) -> Json {
     #("link", json.int(n.link)),
     #("grant", json.int(n.grant)),
     #("document", json.int(n.document)),
+    #("comment", json.int(n.comment)),
   ])
 }
 
@@ -230,8 +240,37 @@ pub fn encode_finding(f: Finding) -> Json {
     #("dismiss_reason", opt(f.dismiss_reason, json.string)),
     #("created_at", json.int(f.created_at)),
     #("delivered_at", opt(f.delivered_at, json.int)),
+    #("acked_at", opt(f.acked_at, json.int)),
     #("closed_at", opt(f.closed_at, json.int)),
   ])
+}
+
+pub fn encode_comment(c: Comment) -> Json {
+  json.object([
+    #("id", json.int(c.id)),
+    #("item", json.int(c.item)),
+    #("author", json.string(author_to_string(c.author))),
+    #("body", json.string(c.body)),
+    #("pick", opt(c.pick, json.string)),
+    #("created_at", json.int(c.created_at)),
+    #("sent_at", opt(c.sent_at, json.int)),
+    #("acked_at", opt(c.acked_at, json.int)),
+  ])
+}
+
+fn author_to_string(author: model.CommentAuthor) -> String {
+  case author {
+    model.HumanAuthor(user) -> "user:" <> int.to_string(user)
+    model.AgentAuthor(agent) -> "agent:" <> int.to_string(agent)
+  }
+}
+
+fn author_from_string(s: String) -> Result(model.CommentAuthor, Nil) {
+  case s {
+    "user:" <> id -> int.parse(id) |> result.map(model.HumanAuthor)
+    "agent:" <> id -> int.parse(id) |> result.map(model.AgentAuthor)
+    _ -> Error(Nil)
+  }
 }
 
 fn encode_event(e: Event) -> Json {
@@ -375,6 +414,11 @@ pub fn state_decoder() -> Decoder(State) {
     [],
     decode.list(document_decoder()),
   )
+  use comments <- decode.optional_field(
+    "comments",
+    [],
+    decode.list(comment_decoder()),
+  )
   decode.success(State(
     saved_at:,
     next_id:,
@@ -390,6 +434,7 @@ pub fn state_decoder() -> Decoder(State) {
     oauth_grants: by(grants, fn(g) { g.id }),
     oauth_tokens: by(tokens, fn(t) { t.token_sha256 }),
     documents: by(documents, fn(d) { d.id }),
+    comments: by(comments, fn(c) { c.id }),
   ))
 }
 
@@ -407,6 +452,7 @@ fn next_ids_decoder() -> Decoder(NextIds) {
   use link <- decode.field("link", decode.int)
   use grant <- decode.field("grant", decode.int)
   use document <- decode.optional_field("document", 1, decode.int)
+  use comment <- decode.optional_field("comment", 1, decode.int)
   decode.success(NextIds(
     user:,
     agent:,
@@ -417,6 +463,7 @@ fn next_ids_decoder() -> Decoder(NextIds) {
     link:,
     grant:,
     document:,
+    comment:,
   ))
 }
 
@@ -613,6 +660,17 @@ fn finding_decoder() -> Decoder(Finding) {
   use dismiss_reason <- nullable("dismiss_reason", decode.string)
   use created_at <- decode.field("created_at", decode.int)
   use delivered_at <- nullable("delivered_at", decode.int)
+  // Files from before acknowledgements have no `acked_at`. Their delivered
+  // findings went out under the old rules, so they count as acked;
+  // repeating them all at once would flood the agents.
+  use acked_at <- decode.optional_field(
+    "acked_at",
+    case status {
+      model.FindingOpen -> None
+      _ -> delivered_at
+    },
+    decode.optional(decode.int),
+  )
   use closed_at <- nullable("closed_at", decode.int)
   decode.success(Finding(
     id:,
@@ -628,7 +686,32 @@ fn finding_decoder() -> Decoder(Finding) {
     dismiss_reason:,
     created_at:,
     delivered_at:,
+    acked_at:,
     closed_at:,
+  ))
+}
+
+fn comment_decoder() -> Decoder(Comment) {
+  use id <- decode.field("id", decode.int)
+  use item <- decode.field("item", decode.int)
+  use author <- decode.field(
+    "author",
+    enum(author_from_string, model.HumanAuthor(0)),
+  )
+  use body <- decode.field("body", decode.string)
+  use pick <- nullable("pick", decode.string)
+  use created_at <- decode.field("created_at", decode.int)
+  use sent_at <- nullable("sent_at", decode.int)
+  use acked_at <- nullable("acked_at", decode.int)
+  decode.success(Comment(
+    id:,
+    item:,
+    author:,
+    body:,
+    pick:,
+    created_at:,
+    sent_at:,
+    acked_at:,
   ))
 }
 
@@ -912,7 +995,19 @@ pub fn check_references(state: State) -> Result(Nil, String) {
           e -> e
         }
       })
-    [r1, r2, r3, r4, r5, r6, r7, r8]
+    let r9 =
+      check_all(dict.values(state.comments), fn(c) {
+        case check(has_item(c.item), "comment item", c.item) {
+          Ok(_) ->
+            case c.author {
+              model.HumanAuthor(u) -> check(has_user(u), "comment author", u)
+              model.AgentAuthor(a) ->
+                check(dict.has_key(state.agents, a), "comment author", a)
+            }
+          e -> e
+        }
+      })
+    [r1, r2, r3, r4, r5, r6, r7, r8, r9]
   }
   list.try_each(result, fn(r) { r })
 }

@@ -10,11 +10,11 @@ import gleam/order
 import gleam/result
 import gleam/string
 import huddy/model.{
-  type Agent, type DocFile, type DocRevision, type Document, type Finding,
-  type FindingKind, type Item, type ItemState, type Kind, type McpLink,
-  type OAuthGrant, type OAuthToken, type State, type User, Agent, Document,
-  Event, Finding, Item, Judgment, McpLink, OAuthGrant, OAuthToken, State, User,
-  WebSession,
+  type Agent, type Comment, type CommentAuthor, type DocFile, type DocRevision,
+  type Document, type Finding, type FindingKind, type Item, type ItemState,
+  type Kind, type McpLink, type OAuthGrant, type OAuthToken, type State,
+  type User, Agent, Comment, Document, Event, Finding, Item, Judgment, McpLink,
+  OAuthGrant, OAuthToken, State, User, WebSession,
 }
 
 const day_ms = 86_400_000
@@ -1060,6 +1060,7 @@ pub fn add_finding(
           dismiss_reason: None,
           created_at: now,
           delivered_at: None,
+          acked_at: None,
           closed_at: None,
         )
       let state = put_finding(state, finding)
@@ -1117,41 +1118,6 @@ pub fn live_findings_for_agent(state: State, agent_id: Int) -> List(Finding) {
   |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
 }
 
-/// Undelivered findings for an agent; marks them delivered.
-pub fn take_inbox(
-  state: State,
-  agent_id: Int,
-  now: Int,
-) -> #(State, List(Finding)) {
-  let fresh =
-    dict.values(state.findings)
-    |> list.filter(fn(f) {
-      f.agent == agent_id && f.status == model.FindingOpen
-    })
-    |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
-  let state =
-    list.fold(fresh, state, fn(s, f) {
-      put_finding(
-        s,
-        Finding(..f, status: model.Delivered, delivered_at: Some(now)),
-      )
-    })
-  #(state, fresh)
-}
-
-pub fn mark_delivered(state: State, ids: List(Int), now: Int) -> State {
-  list.fold(ids, state, fn(s, id) {
-    case dict.get(s.findings, id) {
-      Ok(f) if f.status == model.FindingOpen ->
-        put_finding(
-          s,
-          Finding(..f, status: model.Delivered, delivered_at: Some(now)),
-        )
-      _ -> s
-    }
-  })
-}
-
 pub fn dismiss_findings(
   state: State,
   agent_id: Int,
@@ -1175,6 +1141,7 @@ pub fn dismiss_findings(
                   ..f,
                   status: model.Dismissed,
                   dismiss_reason: Some(reason),
+                  acked_at: option.or(f.acked_at, Some(now)),
                   closed_at: Some(now),
                 ),
               )
@@ -1192,6 +1159,279 @@ pub fn dismiss_findings(
             ))
           }
         }
+    }
+  })
+}
+
+// --- comments -----------------------------------------------------------------
+
+pub type CommentLimits {
+  CommentLimits(max_chars: Int, per_item: Int)
+}
+
+fn put_comment(state: State, c: Comment) -> State {
+  State(..state, comments: dict.insert(state.comments, c.id, c))
+}
+
+pub fn get_comment(state: State, id: Int) -> Option(Comment) {
+  dict.get(state.comments, id) |> option.from_result
+}
+
+/// An item's comments, oldest first.
+pub fn comments_for_item(state: State, item_id: Int) -> List(Comment) {
+  dict.values(state.comments)
+  |> list.filter(fn(c) { c.item == item_id })
+  |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
+}
+
+pub fn is_human(c: Comment) -> Bool {
+  case c.author {
+    model.HumanAuthor(_) -> True
+    model.AgentAuthor(_) -> False
+  }
+}
+
+/// Add a comment to an open item: a human's (any item; on a decision it may
+/// pick one of the options, and it marks the decision seen), or the item's
+/// own agent replying in the thread.
+pub fn add_comment(
+  state: State,
+  item_id: Int,
+  author: CommentAuthor,
+  body: String,
+  pick: Option(String),
+  limits: CommentLimits,
+  now: Int,
+) -> Result(#(State, Comment), String) {
+  let ref = model.item_ref(item_id)
+  use item <- result.try(
+    get_item(state, item_id) |> option.to_result("No item " <> ref <> "."),
+  )
+  use _ <- result.try(case model.is_open(item) {
+    True -> Ok(Nil)
+    False -> Error(ref <> " is closed; you can only comment on open items.")
+  })
+  use _ <- result.try(case author {
+    model.AgentAuthor(a) if a != item.agent ->
+      Error(
+        ref
+        <> " belongs to "
+        <> agent_label(state, item.agent)
+        <> "; agents can only comment on their own items.",
+      )
+    _ -> Ok(Nil)
+  })
+  let body = string.trim(body)
+  let pick = case pick {
+    Some(p) ->
+      case string.trim(p) {
+        "" -> None
+        _ -> Some(p)
+      }
+    None -> None
+  }
+  use _ <- result.try(case pick, author {
+    None, _ -> Ok(Nil)
+    Some(_), model.AgentAuthor(_) -> Error("Only humans pick an option.")
+    Some(p), _ ->
+      case item.kind == model.Decision && list.contains(item.options, p) {
+        True -> Ok(Nil)
+        False ->
+          Error("The options of " <> ref <> " changed; reload and pick again.")
+      }
+  })
+  use _ <- result.try(case body, pick {
+    "", None -> Error("Write a comment.")
+    _, _ ->
+      case string.length(body) > limits.max_chars {
+        True ->
+          Error(
+            "Comments are at most "
+            <> int.to_string(limits.max_chars)
+            <> " characters.",
+          )
+        False -> Ok(Nil)
+      }
+  })
+  use _ <- result.try(
+    case list.length(comments_for_item(state, item_id)) >= limits.per_item {
+      True -> Error(ref <> " has too many comments; start a new item.")
+      False -> Ok(Nil)
+    },
+  )
+  let #(state, id) =
+    bump(state, fn(n) {
+      #(n.comment, model.NextIds(..n, comment: n.comment + 1))
+    })
+  let comment =
+    Comment(
+      id:,
+      item: item_id,
+      author:,
+      body:,
+      pick:,
+      created_at: now,
+      sent_at: None,
+      acked_at: None,
+    )
+  let #(actor, state) = case author {
+    model.HumanAuthor(user) -> {
+      // answering a decision counts as seeing it
+      let state = case item.kind, item.seen_by {
+        model.Decision, None ->
+          put_item(state, Item(..item, seen_by: Some(user), seen_at: Some(now)))
+        _, _ -> state
+      }
+      #(user_actor(user), state)
+    }
+    model.AgentAuthor(agent) -> #(
+      agent_actor(agent),
+      touch_agent(state, agent, now),
+    )
+  }
+  let detail =
+    case pick {
+      Some(p) ->
+        "picked "
+        <> p
+        <> case body {
+          "" -> ""
+          _ -> ": "
+        }
+      None -> ""
+    }
+    <> string.slice(body, 0, 80)
+  let state =
+    put_comment(state, comment)
+    |> add_event(now, actor, Some(item_id), "comment_added", detail)
+  Ok(#(state, comment))
+}
+
+/// What the agent hasn't acknowledged yet, oldest first: human comments on
+/// its items (whatever state the items are in now) and its live findings.
+pub fn unacked(state: State, agent_id: Int) -> #(List(Comment), List(Finding)) {
+  let comments =
+    dict.values(state.comments)
+    |> list.filter(fn(c) {
+      is_human(c)
+      && option.is_none(c.acked_at)
+      && case get_item(state, c.item) {
+        Some(i) -> i.agent == agent_id
+        None -> False
+      }
+    })
+    |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
+  let findings =
+    dict.values(state.findings)
+    |> list.filter(fn(f) {
+      f.agent == agent_id
+      && model.finding_is_live(f)
+      && option.is_none(f.acked_at)
+    })
+    |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
+  #(comments, findings)
+}
+
+/// Record that these comments and findings went out in a tool result.
+/// Sending is not acknowledging: they keep going out until acked.
+pub fn mark_sent(
+  state: State,
+  comment_ids: List(Int),
+  finding_ids: List(Int),
+  now: Int,
+) -> State {
+  let state =
+    list.fold(comment_ids, state, fn(s, id) {
+      case dict.get(s.comments, id) {
+        Ok(c) -> put_comment(s, Comment(..c, sent_at: Some(now)))
+        Error(_) -> s
+      }
+    })
+  list.fold(finding_ids, state, fn(s, id) {
+    case dict.get(s.findings, id) {
+      Ok(f) if f.status == model.FindingOpen ->
+        put_finding(
+          s,
+          Finding(..f, status: model.Delivered, delivered_at: Some(now)),
+        )
+      _ -> s
+    }
+  })
+}
+
+/// What `huddy_ack` names: a comment or a finding.
+pub type AckRef {
+  AckComment(Int)
+  AckFinding(Int)
+}
+
+/// Parse "c7" or "f88". Bare numbers are refused: they could be either.
+pub fn parse_ack_ref(text: String) -> Result(AckRef, String) {
+  let text = string.trim(text)
+  let parsed = case text {
+    "c" <> n -> int.parse(n) |> result.map(AckComment)
+    "f" <> n -> int.parse(n) |> result.map(AckFinding)
+    _ -> Error(Nil)
+  }
+  result.replace_error(
+    parsed,
+    "Unknown id " <> text <> ": use the ids as shown, like c7 or f88.",
+  )
+}
+
+/// Acknowledge comments and findings addressed to this agent. Acking one
+/// that is already acked (or a finding that is dismissed or resolved) is
+/// fine, so a retry is safe. All or nothing: one bad id refuses the call.
+pub fn ack(
+  state: State,
+  agent_id: Int,
+  refs: List(AckRef),
+  now: Int,
+) -> Result(State, String) {
+  list.try_fold(refs, state, fn(s, r) {
+    case r {
+      AckComment(id) -> {
+        let ref = model.comment_ref(id)
+        case get_comment(s, id) {
+          None -> Error("No comment " <> ref <> ".")
+          Some(c) -> {
+            let owner = case get_item(s, c.item) {
+              Some(i) -> Some(i.agent)
+              None -> None
+            }
+            case is_human(c) && owner == Some(agent_id) {
+              False -> Error(ref <> " is not addressed to you.")
+              True ->
+                case c.acked_at {
+                  Some(_) -> Ok(s)
+                  None ->
+                    put_comment(s, Comment(..c, acked_at: Some(now)))
+                    |> add_event(
+                      now,
+                      agent_actor(agent_id),
+                      Some(c.item),
+                      "comment_acked",
+                      ref,
+                    )
+                    |> Ok
+                }
+            }
+          }
+        }
+      }
+      AckFinding(id) -> {
+        let ref = model.finding_ref(id)
+        case dict.get(s.findings, id) {
+          Error(_) -> Error("No finding " <> ref <> ".")
+          Ok(f) if f.agent != agent_id ->
+            Error(ref <> " is addressed to another agent.")
+          Ok(f) ->
+            case f.acked_at {
+              Some(_) -> Ok(s)
+              None -> Ok(put_finding(s, Finding(..f, acked_at: Some(now))))
+            }
+        }
+      }
     }
   })
 }
@@ -1579,6 +1819,8 @@ pub fn prune(state: State, policy: RetentionPolicy, now: Int) -> State {
     dict.filter(state.findings, fn(_, f) {
       !is_doomed(f.item) && !is_doomed(f.related_item)
     })
+  let comments =
+    dict.filter(state.comments, fn(_, c) { !list.contains(doomed, c.item) })
   let events =
     list.filter(state.events, fn(e) {
       e.at >= now - policy.events_days * day_ms
@@ -1612,6 +1854,7 @@ pub fn prune(state: State, policy: RetentionPolicy, now: Int) -> State {
     ..state,
     items:,
     findings:,
+    comments:,
     events:,
     judgments:,
     web_sessions: sessions,

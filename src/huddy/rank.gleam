@@ -7,6 +7,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
+import gleam/result
 import gleam/set.{type Set}
 import gleam/string
 import huddy/config
@@ -49,6 +50,19 @@ pub type ItemView {
     hidden_by: Option(String),
     /// linked documents: ref (`model.doc_ref`) and title
     docs: List(#(String, String)),
+    /// the item's thread, oldest first
+    comments: List(CommentView),
+    /// decisions: who answered last (the latest human comment)
+    answered: Option(#(String, Int)),
+  )
+}
+
+pub type CommentView {
+  CommentView(
+    comment: model.Comment,
+    /// the commenter's handle, or the agent's label for an agent's reply
+    author: String,
+    by_agent: Bool,
   )
 }
 
@@ -122,9 +136,11 @@ pub fn compute(
   let open =
     state.open_items(s)
     |> list.filter(fn(i) { set.contains(agent_ids, i.agent) && shown(i) })
+  let threads = threads(s)
   let view_of = fn(i: Item) {
     item_view(
       s,
+      threads,
       i,
       priority(i, away(i.agent), stale_threshold, now),
       away(i.agent),
@@ -136,19 +152,26 @@ pub fn compute(
     |> list.map(view_of)
     |> list.sort(fn(a, b) { int.compare(b.item.updated_at, a.item.updated_at) })
 
-  // decisions: blockers always shown, unseen first, then oldest first
+  // decisions: blockers always shown; unseen first, then seen, then
+  // answered, oldest first within each
   let decisions =
     visible_items
     |> list.filter(fn(i) { i.kind == model.Decision })
     |> list.map(view_of)
+  let attention = fn(v: ItemView) {
+    case v.answered, v.seen_by {
+      Some(_), _ -> 2
+      None, Some(_) -> 1
+      None, None -> 0
+    }
+  }
   let blocking =
     decisions
     |> list.filter(fn(v) { v.item.blocking })
     |> list.sort(fn(a, b) {
-      case option.is_some(a.seen_by), option.is_some(b.seen_by) {
-        False, True -> order.Lt
-        True, False -> order.Gt
-        _, _ -> int.compare(a.item.created_at, b.item.created_at)
+      case int.compare(attention(a), attention(b)) {
+        order.Eq -> int.compare(a.item.created_at, b.item.created_at)
+        o -> o
       }
     })
   let non_blocking = list.filter(decisions, fn(v) { !v.item.blocking })
@@ -190,7 +213,7 @@ pub fn compute(
         Ok(a) if now - a.last_seen_at < 3_600_000 -> 0.2
         _ -> 0.0
       }
-      item_view(s, g, best +. recent, away(g.agent))
+      item_view(s, threads, g, best +. recent, away(g.agent))
     })
   let groups = group_goals(goal_views)
   let #(goals_shown, goals_more) =
@@ -295,7 +318,48 @@ fn exp(x: Float) -> Float {
   }
 }
 
-fn item_view(s: State, item: Item, priority: Float, away: Bool) -> ItemView {
+/// Comments by item, each thread oldest first.
+fn threads(s: State) -> dict.Dict(Int, List(model.Comment)) {
+  dict.values(s.comments)
+  |> list.sort(fn(a, b) { int.compare(b.id, a.id) })
+  |> list.fold(dict.new(), fn(acc, c) {
+    dict.upsert(acc, c.item, fn(existing) { [c, ..option.unwrap(existing, [])] })
+  })
+}
+
+fn comment_view(s: State, c: model.Comment) -> CommentView {
+  case c.author {
+    model.HumanAuthor(user) ->
+      CommentView(comment: c, author: state.handle_of(s, user), by_agent: False)
+    model.AgentAuthor(agent) ->
+      CommentView(
+        comment: c,
+        author: state.agent_label(s, agent),
+        by_agent: True,
+      )
+  }
+}
+
+fn item_view(
+  s: State,
+  threads: dict.Dict(Int, List(model.Comment)),
+  item: Item,
+  priority: Float,
+  away: Bool,
+) -> ItemView {
+  let comments =
+    dict.get(threads, item.id)
+    |> result.unwrap([])
+    |> list.map(comment_view(s, _))
+  let answered = case item.kind {
+    model.Decision ->
+      comments
+      |> list.filter(fn(c) { !c.by_agent })
+      |> list.last
+      |> option.from_result
+      |> option.map(fn(c) { #(c.author, c.comment.created_at) })
+    _ -> None
+  }
   let owner = case dict.get(s.agents, item.agent) {
     Ok(a) -> a.owner
     Error(_) -> 0
@@ -322,6 +386,8 @@ fn item_view(s: State, item: Item, priority: Float, away: Bool) -> ItemView {
         None -> Error(Nil)
       }
     }),
+    comments:,
+    answered:,
   )
 }
 

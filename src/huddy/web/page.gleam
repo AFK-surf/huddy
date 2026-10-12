@@ -24,6 +24,7 @@ pub type Board {
     unseen: Int,
     storage_error: Option(String),
     tokens_month: Int,
+    comment_max_chars: Int,
     now: Int,
   )
 }
@@ -45,6 +46,7 @@ pub fn load(ctx: Ctx, viewer: User, filters: rank.Filters) -> Board {
     unseen:,
     storage_error: store.status(ctx.store),
     tokens_month: tokens,
+    comment_max_chars: ctx.config.limits.comment_max_chars,
     now:,
   )
 }
@@ -326,7 +328,7 @@ fn decisions(board: Board) -> String {
       html.when(all != [], fn() {
         html.div([html.class("hint")], [
           html.text(
-            "Answer agents in their own session; they mark the decision resolved.",
+            "Answer here or in the agent's session. Answers reach the agent with its next Huddy call; it marks the decision resolved.",
           ),
         ])
       }),
@@ -388,9 +390,14 @@ fn decision_card(board: Board, v: ItemView) -> Node {
         ])
     },
     flags(v),
+    thread(board, v, 3),
     html.div([html.class("opts")], [
-      case v.seen_by {
-        Some(who) ->
+      case v.answered, v.seen_by {
+        Some(#(who, at)), _ ->
+          html.span([html.class("seen")], [
+            html.text("answered by " <> who <> " · " <> fmt.age(board.now, at)),
+          ])
+        None, Some(who) ->
           html.span([html.class("seen")], [
             html.text(
               "seen by "
@@ -399,7 +406,7 @@ fn decision_card(board: Board, v: ItemView) -> Node {
               <> fmt.age(board.now, option.unwrap(item.seen_at, board.now)),
             ),
           ])
-        None ->
+        None, None ->
           html.post_form(
             "/items/" <> int.to_string(item.id) <> "/seen",
             [#("data-fetch", "")],
@@ -419,8 +426,133 @@ fn decision_card(board: Board, v: ItemView) -> Node {
             ],
           )
       },
+      comment_control(board, v, []),
       hide_control(board, v),
     ]),
+  ])
+}
+
+/// The item's most recent `show` comments; older ones behind a toggle.
+fn thread(board: Board, v: ItemView, show: Int) -> Node {
+  case v.comments {
+    [] -> html.none()
+    comments -> {
+      let #(earlier, recent) =
+        list.split(comments, int.max(list.length(comments) - show, 0))
+      html.div([html.class("thread")], [
+        case earlier {
+          [] -> html.none()
+          _ ->
+            html.el("details", [html.class("earlier")], [
+              html.el("summary", [], [
+                html.text(int.to_string(list.length(earlier)) <> " earlier"),
+              ]),
+              html.fragment(list.map(earlier, comment_line(board, _))),
+            ])
+        },
+        html.fragment(list.map(recent, comment_line(board, _))),
+      ])
+    }
+  }
+}
+
+fn comment_line(board: Board, cv: rank.CommentView) -> Node {
+  let c = cv.comment
+  html.div(
+    [
+      html.class(case cv.by_agent {
+        True -> "cm agent"
+        False -> "cm"
+      }),
+      html.id(model.comment_ref(c.id)),
+    ],
+    [
+      html.el("b", [], [html.text(cv.author)]),
+      case c.pick {
+        Some(p) -> html.text(" picked " <> fmt.quote(p))
+        None -> html.none()
+      },
+      html.span([html.class("age")], [
+        html.text(" · " <> fmt.age(board.now, c.created_at)),
+      ]),
+      case c.body {
+        "" -> html.none()
+        b -> html.fragment([html.text(": "), html.fragment(linkify(b))])
+      },
+      case cv.by_agent {
+        True -> html.none()
+        False ->
+          html.span([html.class("receipt")], [
+            html.text(case c.acked_at, c.sent_at {
+              Some(at), _ -> "✓ acknowledged " <> fmt.ago(board.now, at)
+              None, Some(at) ->
+                "sent " <> fmt.ago(board.now, at) <> " · not acknowledged"
+              None, None -> "⧗ waits for the agent's next Huddy call"
+            }),
+          ])
+      },
+    ],
+  )
+}
+
+/// "comment" (or "answer" on a decision): a note for the item's agent.
+/// Decisions with options get one button per option. `also` names other
+/// goals that get the same comment (a merged goal rectangle).
+fn comment_control(board: Board, v: ItemView, also: List(Int)) -> Node {
+  let item = v.item
+  let decision = item.kind == model.Decision
+  html.el("details", [html.class("comment")], [
+    html.el("summary", [], [
+      html.text(case decision {
+        True -> "answer"
+        False -> "comment"
+      }),
+    ]),
+    html.post_form(
+      "/items/" <> int.to_string(item.id) <> "/comment",
+      [#("data-fetch", ""), #("data-reset", "")],
+      [
+        #("return_to", "/" <> query_string(board.view.filters)),
+        ..list.map(also, fn(id) { #("also", model.item_ref(id)) })
+      ],
+      [
+        case decision, item.options {
+          True, [_, ..] as options ->
+            html.div(
+              [html.class("picks")],
+              list.map(options, fn(o) {
+                html.el(
+                  "button",
+                  [
+                    html.class("pick"),
+                    #("type", "submit"),
+                    #("name", "pick"),
+                    #("value", o),
+                  ],
+                  [html.text(o)],
+                )
+              }),
+            )
+          _, _ -> html.none()
+        },
+        html.el(
+          "textarea",
+          [
+            #("name", "body"),
+            #("rows", "2"),
+            #("maxlength", int.to_string(board.comment_max_chars)),
+            #("placeholder", case decision {
+              True -> "your answer, or a note with the pick"
+              False -> "a comment for the agent"
+            }),
+          ],
+          [],
+        ),
+        html.el("button", [html.class("linkish"), #("type", "submit")], [
+          html.text("send"),
+        ]),
+      ],
+    ),
   ])
 }
 
@@ -550,7 +682,8 @@ fn columns(board: Board) -> String {
         case v.goals {
           [] ->
             html.el("p", [html.class("muted")], [html.text("No goals yet.")])
-          goals -> html.div([html.class("goals")], list.map(goals, goal))
+          goals ->
+            html.div([html.class("goals")], list.map(goals, goal(board, _)))
         },
         more(v.goals_more, "goals", v.filters),
       ]),
@@ -578,7 +711,7 @@ fn columns(board: Board) -> String {
   )
 }
 
-fn goal(g: rank.GoalGroup) -> Node {
+fn goal(board: Board, g: rank.GoalGroup) -> Node {
   let p = g.primary
   html.div([html.class("goal"), html.id(model.item_ref(p.item.id))], [
     html.div([html.class("bubble sk")], [
@@ -608,6 +741,8 @@ fn goal(g: rank.GoalGroup) -> Node {
         )
       }),
     ),
+    thread(board, p, 2),
+    comment_control(board, p, list.map(g.others, fn(o) { o.item.id })),
   ])
 }
 
@@ -643,6 +778,7 @@ fn task(board: Board, v: ItemView) -> Node {
         },
         detail(item.detail, "sub"),
         flags(v),
+        thread(board, v, 2),
       ]),
       html.div([html.class("side")], [
         html.span([html.class("meta")], [
@@ -650,6 +786,7 @@ fn task(board: Board, v: ItemView) -> Node {
             v.agent_label <> " · " <> fmt.age(board.now, item.updated_at),
           ),
         ]),
+        comment_control(board, v, []),
         hide_control(board, v),
       ]),
     ],
@@ -688,6 +825,7 @@ fn hidden(board: Board) -> String {
                       },
                     ),
                   ]),
+                  thread(board, v, 2),
                 ]),
                 html.div([html.class("side")], [
                   html.span([html.class("meta")], [html.text(v.agent_label)]),
