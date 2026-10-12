@@ -1395,6 +1395,24 @@ pub fn unacked(state: State, agent_id: Int) -> #(List(Comment), List(Finding)) {
   #(comments, findings)
 }
 
+/// Whether anything unacknowledged has never gone out to the agent: news
+/// since its last Huddy result. `huddy_wait` returns when there is.
+pub fn has_unsent(state: State, agent_id: Int) -> Bool {
+  let #(comments, findings) = unacked(state, agent_id)
+  list.any(comments, comment_unsent) || list.any(findings, finding_unsent)
+}
+
+/// A comment never included in a tool result.
+pub fn comment_unsent(c: Comment) -> Bool {
+  option.is_none(c.sent_at)
+}
+
+/// A finding never included in a tool result: still open, exactly what
+/// `mark_sent` moves on.
+pub fn finding_unsent(f: Finding) -> Bool {
+  f.status == model.FindingOpen
+}
+
 /// Record that these comments and findings went out in a tool result.
 /// Sending is not acknowledging: they keep going out until acked.
 pub fn mark_sent(

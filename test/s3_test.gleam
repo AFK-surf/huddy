@@ -418,7 +418,7 @@ fn fake_config(port: Int) -> s3.Config {
 }
 
 pub fn persist_round_trip_through_s3_test() {
-  let port = 48_311
+  let port = 28_311
   let config = fake_config(port)
   let objects = start_fake_s3(port, config)
   let path = blob.Object(config, "huddy", "team a/huddy.json")
@@ -454,7 +454,7 @@ pub fn persist_round_trip_through_s3_test() {
 }
 
 pub fn s3_errors_are_reported_test() {
-  let port = 48_312
+  let port = 28_312
   let _ = start_fake_s3(port, fake_config(port))
   let wrong_key =
     s3.Config(..fake_config(port), secret_access_key: "not-the-right-key")
