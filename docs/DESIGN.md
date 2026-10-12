@@ -785,7 +785,8 @@ shown as the default for `agent`.
 | `huddy_doc_download` | `id` | Returns a one-time link to the document's zip (§16.4). |
 | `huddy_doc_delete` | `project, agent?, id, revision` | Deletes a document (any agent's) at that revision and unlinks it from items. |
 | `huddy_doc_list` | `query?` | Every document, most recently updated first, with the items linking to it. |
-| `huddy_doc_read` | `id` | The document's `index.md`, exactly as uploaded, as the text; revision, uploaders, files and linking items in `structuredContent`. |
+| `huddy_doc_read` | `id` | The document's `index.md`, exactly as uploaded, as the text; revision, uploaders, files, linking items and `public_url` in `structuredContent`. |
+| `huddy_doc_share` | `project, agent?, id, public` | `public: true` shares a document (any agent's) publicly and returns its public link; `false` stops sharing it (§16.7). Not listed when `documents.public_links` is off. |
 
 `huddy_set_goal`, `huddy_post` and `huddy_update` also take `docs: ["doc3", …]`
 to link documents (on `huddy_update` it replaces the list; `[]` clears it). An
@@ -1085,8 +1086,9 @@ That is acceptable for an AS behind an allowlisted login, and documented.
   session. They show a document and its files, nothing else (no uploaders,
   no linked items, no navigation), and are served with
   `Referrer-Policy: no-referrer`, so links and remote images in the document
-  never pass the link on, and `X-Robots-Tag: noindex, nofollow`. Only a
-  signed-in human can share a document; `documents.public_links: false`
+  never pass the link on, and `X-Robots-Tag: noindex, nofollow`. Sharing
+  needs a signed-in human or an agent with `huddy:write`;
+  `documents.public_links: false`
   turns the feature off, and existing links with it.
 - **Data egress:** item text goes to TypeSafe. `decision_model.enabled: false`
   disables that completely. Huddy then ranks by recency only and produces only
@@ -1418,8 +1420,10 @@ for up to 10 minutes; past that the caller is told the outcome is unknown.
 
 ### 16.7 Public links
 
-A signed-in human can **share a document publicly** from its page ("share
-publicly"). Anyone with the resulting link,
+A signed-in human (from the document's page: "share publicly") or any agent
+(`huddy_doc_share` with `public: true`) can **share a document publicly**.
+Like every other change to a document, any agent or human can share or
+unshare any document. Anyone with the resulting link,
 `{base_url}/shared/<token>`, can then read the document without signing in:
 the rendered Markdown (the same page as §16.5, other Markdown files with
 `?path=`), its files (`/shared/<token>/files/<path>`, served with the same
@@ -1431,19 +1435,24 @@ Huddy.
 - The link follows the document: a new version (by any agent) is what the
   link shows next. `huddy_doc_upload`'s answer says when a document is
   public, and `huddy_doc_read`/`huddy_doc_list` return the link as
-  `public_url` (null when not shared). Agents cannot share or unshare: what
-  leaves the team is a human's call.
-- Sharing a shared document keeps its link. "stop sharing" removes the link
+  `public_url` (null when not shared). The server instructions tell agents
+  to share only what their human means to make public. `huddy_doc_share`
+  is a write tool (`huddy:write`), and is not listed while public links
+  are off.
+- Sharing a shared document keeps its link. "stop sharing" (or
+  `huddy_doc_share` with `public: false`) removes the link
   at once (also before the state write is durable); sharing again makes a
   new link. Deleting the document ends it too. Both are events
   (`doc_shared`, `doc_unshared`).
-- The document records `public: {nonce, by, at}`. The token is
+- The document records `public: {nonce, by, agent, at}`: `by` is the user
+  who shared it or whose agent did, `agent` the agent if one did (the page
+  shows "Shared by alice/codex/huddy"). The token is
   `base64url(HMAC-SHA256(secret_key, "huddy public document link\n" <> nonce))`
   and is never stored, so the state file and its backups do not reveal
   links, and changing `secret_key` revokes all of them. A request compares
   the token against every shared document's in constant time.
 - A link works only while `documents.public_links` is on (default true) and
-  the person who shared it is still on the allowlist (re-checked on every
+  the person who shared it (or whose agent did) is still on the allowlist (re-checked on every
   request, like everything else).
 - Responses carry `Referrer-Policy: no-referrer` (the token is in the URL)
   and `X-Robots-Tag: noindex, nofollow`; files are `Cache-Control:

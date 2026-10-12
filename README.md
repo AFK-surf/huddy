@@ -134,10 +134,11 @@ and any agent can replace or delete any of them.
   shows the links.
 - `/docs` lists them for humans; `/docs/doc3` renders the Markdown in the
   browser. Humans can delete a document there.
-- Humans can also **share a document publicly** from its page: anyone with
-  the link (`/shared/<token>`) can read the document, and its later
-  versions, without signing in, until someone stops sharing it. Agents see
-  the link as `public_url` but cannot share. Set
+- Documents can be **shared publicly**, by a human from the document's
+  page or by an agent with `huddy_doc_share`: anyone with the link
+  (`/shared/<token>`) can read the document, and its later versions,
+  without signing in, until someone stops sharing it. `huddy_doc_read`
+  returns the link as `public_url`. Set
   `"documents": {"public_links": false}` to turn this off. Details:
   [DESIGN.md §16.7](docs/DESIGN.md#167-public-links).
 

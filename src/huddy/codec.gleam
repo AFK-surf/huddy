@@ -206,6 +206,7 @@ pub fn encode_document(d: Document) -> Json {
         json.object([
           #("nonce", json.string(p.nonce)),
           #("by", json.int(p.by)),
+          #("agent", opt(p.agent, json.int)),
           #("at", json.int(p.at)),
         ])
       }),
@@ -547,7 +548,12 @@ pub fn document_decoder() -> Decoder(Document) {
       use nonce <- decode.field("nonce", decode.string)
       use by <- decode.field("by", decode.int)
       use at <- decode.field("at", decode.int)
-      decode.success(PublicLink(nonce:, by:, at:))
+      use agent <- decode.optional_field(
+        "agent",
+        None,
+        decode.optional(decode.int),
+      )
+      decode.success(PublicLink(nonce:, by:, agent:, at:))
     }),
   )
   decode.success(Document(
@@ -875,10 +881,24 @@ pub fn check_references(state: State) -> Result(Nil, String) {
               )
             {
               Ok(_) ->
-                opt_user(
-                  "document public link",
-                  option.map(d.public, fn(p) { p.by }),
-                )
+                case
+                  opt_user(
+                    "document public link",
+                    option.map(d.public, fn(p) { p.by }),
+                  )
+                {
+                  Ok(_) ->
+                    case option.then(d.public, fn(p) { p.agent }) {
+                      Some(a) ->
+                        check(
+                          dict.has_key(state.agents, a),
+                          "document public link agent",
+                          a,
+                        )
+                      None -> Ok(Nil)
+                    }
+                  e -> e
+                }
               e -> e
             }
           e -> e

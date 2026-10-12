@@ -549,11 +549,15 @@ pub fn find_public(ctx: Ctx, token: String) -> Option(Document) {
 
 /// Share a document publicly, or keep its link if it is already shared.
 /// The link works as soon as the change is in memory.
-pub fn share(ctx: Ctx, doc_id: Int, user_id: Int) -> Result(Document, String) {
+pub fn share(
+  ctx: Ctx,
+  doc_id: Int,
+  sharer: state.Sharer,
+) -> Result(Document, String) {
   let nonce = sys.random_token(16)
   case
     store.update_or_pending(ctx.store, fn(s, e, now) {
-      case state.share_document(s, doc_id, user_id, nonce, now) {
+      case state.share_document(s, doc_id, sharer, nonce, now) {
         Ok(#(s, doc)) -> store.Changed(s, e, [], Ok(doc))
         Error(reason) -> store.NoChange(Error(reason))
       }
@@ -566,11 +570,15 @@ pub fn share(ctx: Ctx, doc_id: Int, user_id: Int) -> Result(Document, String) {
 
 /// Stop sharing a document. The link stops working as soon as the change is
 /// in memory, even if writing it to storage has to be retried.
-pub fn unshare(ctx: Ctx, doc_id: Int, user_id: Int) -> Result(Nil, String) {
+pub fn unshare(
+  ctx: Ctx,
+  doc_id: Int,
+  sharer: state.Sharer,
+) -> Result(Document, String) {
   case
     store.update_or_pending(ctx.store, fn(s, e, now) {
-      case state.unshare_document(s, doc_id, user_id, now) {
-        Ok(#(s, _)) -> store.Changed(s, e, [], Ok(Nil))
+      case state.unshare_document(s, doc_id, sharer, now) {
+        Ok(#(s, doc)) -> store.Changed(s, e, [], Ok(doc))
         Error(reason) -> store.NoChange(Error(reason))
       }
     })

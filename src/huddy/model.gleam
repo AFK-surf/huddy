@@ -115,7 +115,15 @@ pub type Document {
 /// the server's secret key (see `documents.public_token`), so the state file
 /// alone does not reveal it, and rotating the key revokes every link.
 pub type PublicLink {
-  PublicLink(nonce: String, by: Int, at: Int)
+  PublicLink(
+    nonce: String,
+    /// the user who shared it, or whose agent did; the link works while
+    /// they are on the allowlist
+    by: Int,
+    /// the agent that shared it, if an agent did
+    agent: Option(Int),
+    at: Int,
+  )
 }
 
 pub type DocFile {

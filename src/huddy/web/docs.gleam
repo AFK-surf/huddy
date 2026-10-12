@@ -525,7 +525,7 @@ fn sharing(
       ])
     True, Some(link) -> {
       let #(by, url) = #(
-        store.read(ctx.store, fn(s, _) { state.handle_of(s, link.by) }),
+        store.read(ctx.store, fn(s, _) { state.shared_by(s, link) }),
         documents.public_url(ctx, doc) |> option.unwrap(""),
       )
       html.fragment([
@@ -749,8 +749,8 @@ fn share(
     _, False, _ | _, _, Error(_) -> wisp.not_found()
     True, True, Ok(id) -> {
       let result = case public {
-        True -> documents.share(ctx, id, user.id) |> result.replace(Nil)
-        False -> documents.unshare(ctx, id, user.id)
+        True -> documents.share(ctx, id, state.ByUser(user.id))
+        False -> documents.unshare(ctx, id, state.ByUser(user.id))
       }
       case result {
         Ok(_) ->

@@ -775,30 +775,53 @@ pub fn delete_document(
   Ok(#(state, doc))
 }
 
-/// Share a document publicly (any human may): anyone with its link can read
-/// the current version, whoever uploads it. Sharing a document that is
-/// already public keeps its link.
+/// Who shares a document or stops sharing it: a human, or an agent (on
+/// behalf of its owner).
+pub type Sharer {
+  ByUser(Int)
+  ByAgent(Int)
+}
+
+fn sharer_actor(sharer: Sharer) -> String {
+  case sharer {
+    ByUser(id) -> user_actor(id)
+    ByAgent(id) -> agent_actor(id)
+  }
+}
+
+/// Share a document publicly (any human or agent may): anyone with its link
+/// can read the current version, whoever uploads it. Sharing a document that
+/// is already public keeps its link.
 pub fn share_document(
   state: State,
   id: Int,
-  user_id: Int,
+  sharer: Sharer,
   nonce: String,
   now: Int,
 ) -> Result(#(State, Document), String) {
-  case get_document(state, id) {
-    None -> Error("No document " <> model.doc_ref(id) <> ".")
-    Some(Document(public: Some(_), ..) as doc) -> Ok(#(state, doc))
-    Some(doc) -> {
+  let by = case sharer {
+    ByUser(user) -> Ok(#(user, None))
+    ByAgent(agent) ->
+      case get_agent(state, agent) {
+        Some(a) -> Ok(#(a.owner, Some(agent)))
+        None -> Error("No agent " <> int.to_string(agent) <> ".")
+      }
+  }
+  case get_document(state, id), by {
+    None, _ -> Error("No document " <> model.doc_ref(id) <> ".")
+    _, Error(reason) -> Error(reason)
+    Some(Document(public: Some(_), ..) as doc), _ -> Ok(#(state, doc))
+    Some(doc), Ok(#(user, agent)) -> {
       let doc =
         Document(
           ..doc,
-          public: Some(model.PublicLink(nonce:, by: user_id, at: now)),
+          public: Some(model.PublicLink(nonce:, by: user, agent:, at: now)),
         )
       let state =
         State(..state, documents: dict.insert(state.documents, id, doc))
         |> add_event(
           now,
-          user_actor(user_id),
+          sharer_actor(sharer),
           None,
           "doc_shared",
           model.doc_ref(id) <> ": " <> doc.title,
@@ -813,7 +836,7 @@ pub fn share_document(
 pub fn unshare_document(
   state: State,
   id: Int,
-  user_id: Int,
+  sharer: Sharer,
   now: Int,
 ) -> Result(#(State, Document), String) {
   case get_document(state, id) {
@@ -825,13 +848,22 @@ pub fn unshare_document(
         State(..state, documents: dict.insert(state.documents, id, doc))
         |> add_event(
           now,
-          user_actor(user_id),
+          sharer_actor(sharer),
           None,
           "doc_unshared",
           model.doc_ref(id) <> ": " <> doc.title,
         )
       Ok(#(state, doc))
     }
+  }
+}
+
+/// Who shared a document publicly: "alice/codex/huddy" for an agent, else
+/// the human's handle.
+pub fn shared_by(state: State, link: model.PublicLink) -> String {
+  case link.agent {
+    Some(agent) -> agent_label(state, agent)
+    None -> handle_of(state, link.by)
   }
 }
 

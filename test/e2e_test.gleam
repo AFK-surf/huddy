@@ -1256,6 +1256,98 @@ pub fn public_sharing_test() {
   assert send(http.Get, new_url, [], "").status == 404
 }
 
+pub fn agents_share_documents_test() {
+  let #(ctx, _) = boot(48_315)
+  let alice = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let bob = user_with_link(ctx, "bob@acme.dev", Some(#("claude-code", "api")))
+  assert upload_doc(alice, [], <<"# Plan\n":utf8>>).status == 200
+  let share = fn(mcp, id, public) {
+    rpc(
+      mcp,
+      [],
+      call(
+        "huddy_doc_share",
+        json.object([
+          #("id", json.string(id)),
+          #("public", json.bool(public)),
+        ]),
+      ),
+    )
+  }
+  let cookie = web_session(ctx, "carol@acme.dev")
+
+  // agents learn about it from the instructions and the tool list
+  let tools =
+    rpc(
+      alice,
+      [],
+      json.object([
+        #("jsonrpc", json.string("2.0")),
+        #("id", json.int(5)),
+        #("method", json.string("tools/list")),
+      ]),
+    )
+  assert string.contains(tools.body, "\"name\":\"huddy_doc_share\"")
+
+  // any agent can share any document, and gets its public link
+  let resp = share(bob, "doc1", True)
+  assert !is_error(resp)
+  let url = structured(resp, ["result", "public_url"])
+  assert string.starts_with(url, base(ctx) <> "/shared/")
+  assert string.contains(tool_text(resp), "is shared publicly: " <> url <> "\n")
+  assert send(http.Get, url, [], "").status == 200
+  // sharing again returns the same link
+  assert structured(share(alice, "doc1", True), ["result", "public_url"]) == url
+  // humans see which agent shared it
+  let page =
+    send(http.Get, base(ctx) <> "/docs/doc1", [#("cookie", cookie)], "")
+  assert string.contains(page.body, "Shared by bob/claude-code/api")
+
+  // and any agent can stop sharing it
+  let resp = share(alice, "doc1", False)
+  assert !is_error(resp)
+  assert string.contains(tool_text(resp), "no longer works")
+  assert send(http.Get, url, [], "").status == 404
+
+  // bad arguments
+  assert string.contains(
+    tool_text(share(alice, "doc9", True)),
+    "No document doc9",
+  )
+  let resp =
+    rpc(
+      alice,
+      [],
+      call("huddy_doc_share", json.object([#("id", json.string("doc1"))])),
+    )
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "`public` is required")
+
+  // sharing is a write: a read-only link cannot
+  let secret = sys.random_token(32)
+  let assert Ok(_) =
+    store.update(ctx.store, fn(s, e, now) {
+      let #(s, user) = state.create_user(s, "dave@acme.dev", now)
+      let #(s, _) =
+        state.create_link(
+          s,
+          user.id,
+          sys.sha256_hex(secret),
+          "ro",
+          Some("codex"),
+          Some("huddy"),
+          "huddy:read",
+          now,
+        )
+      store.Changed(s, e, [], Nil)
+    })
+  let resp = share(base(ctx) <> "/mcp/k/" <> secret, "doc1", True)
+  assert is_error(resp)
+  let assert Some(doc) =
+    store.read(ctx.store, fn(s, _) { state.get_document(s, 1) })
+  assert doc.public == None
+}
+
 pub fn public_links_can_be_turned_off_test() {
   let #(ctx, _) =
     boot_with(48_314, fn(cfg) {
@@ -1275,10 +1367,34 @@ pub fn public_links_can_be_turned_off_test() {
       "",
     )
   assert shared.status == 404
+  // nor can agents
+  let tools =
+    rpc(
+      agent,
+      [],
+      json.object([
+        #("jsonrpc", json.string("2.0")),
+        #("id", json.int(5)),
+        #("method", json.string("tools/list")),
+      ]),
+    )
+  assert !string.contains(tools.body, "\"name\":\"huddy_doc_share\"")
+  let resp =
+    rpc(
+      agent,
+      [],
+      call(
+        "huddy_doc_share",
+        json.object([#("id", json.string("doc1")), #("public", json.bool(True))]),
+      ),
+    )
+  assert is_error(resp)
+  assert string.contains(tool_text(resp), "turned off")
   // a link shared before they were turned off stops working
   let assert Ok(_) =
     store.update(ctx.store, fn(s, e, now) {
-      let assert Ok(#(s, _)) = state.share_document(s, 1, 1, "nonce", now)
+      let assert Ok(#(s, _)) =
+        state.share_document(s, 1, state.ByUser(1), "nonce", now)
       store.Changed(s, e, [], Nil)
     })
   let assert Some(doc) =
