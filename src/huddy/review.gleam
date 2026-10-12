@@ -232,14 +232,15 @@ pub fn write_request(s: State, item: Item, now: Int) -> Request {
     list.map(unfiled, fn(t) {
       #(
         "serves_" <> ref(t),
+        // Wording calibrated against the live model (see DESIGN.md §15).
         jev.Noul(
-          "new_item is a goal the agent has set. Is the agent's task "
+          "new_item is a goal the agent has set. Does doing the agent's task "
             <> ref(t)
             <> " (\""
             <> t.title
-            <> "\") a step towards new_item?",
-          "The task is part of the work towards new_item's end state",
-          "The task is unrelated to new_item, or serves a different outcome",
+            <> "\") directly move new_item's end state closer?",
+          "Doing the task is part of reaching new_item's end state",
+          "The task is separate work, even if it shares words or an area with new_item",
         ),
       )
     })

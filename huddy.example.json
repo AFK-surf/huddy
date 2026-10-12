@@ -67,7 +67,7 @@
       "duplicate": 0.75,
       "overlap": 0.7,
       "stale": 0.6,
-      "goal": 0.5
+      "goal": 0.6
     },
     "sweep_interval_minutes": 15,
     "sweep_idle_hours": 2,

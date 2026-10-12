@@ -557,7 +557,7 @@ pub fn default_thresholds() -> Thresholds {
     duplicate: 0.75,
     overlap: 0.7,
     stale: 0.6,
-    goal: 0.5,
+    goal: 0.6,
   )
 }
 

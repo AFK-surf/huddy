@@ -177,7 +177,7 @@ Literal values work too.
       "duplicate": 0.75,                         // same agent
       "overlap": 0.70,                           // another agent
       "stale": 0.60,
-      "goal": 0.50                               // filing a task under a goal (or under none)
+      "goal": 0.60                               // filing a task under a goal (or under none)
     },
     "sweep_interval_minutes": 15,
     "sweep_idle_hours": 2,                       // re-review agents whose newest update is older than this
@@ -671,9 +671,10 @@ serve, so the board can list each goal's tasks under it (§9.2):
   step towards?"*, with one option per open goal (ref → title, up to 8) and
   `none`.
 - A **goal** adds `serves_iNN` (noul) for each of its agent's open tasks that
-  are not filed under an open goal (up to 6): *"Is the agent's task iNN a step
-  towards new_item?"* This picks up tasks posted before the goal, and tasks
-  whose goal was achieved or abandoned.
+  are not filed under an open goal (up to 6): *"Does doing the agent's task
+  iNN directly move new_item's end state closer?"* (no: *"separate work, even
+  if it shares words or an area with new_item"*). This picks up tasks posted
+  before the goal, and tasks whose goal was achieved or abandoned.
 
 Until the model has answered, a new task is filed under its agent's goal when
 the agent has exactly one, and none otherwise. A goal set with `replaces`
@@ -1292,6 +1293,9 @@ Where the implementation refined the design above:
   | `readable` | yes/no criteria | Clear titles went from ≥0.34 to ≥0.49; vague ones ("fix", "wip asdf", "CI") ≤0.24. Threshold 0.4. |
   | `answerable` | yes/no criteria | Real questions 0.97–0.98; status lines 0.04–0.17. |
   | `stale_iNN` | A yes/no question naming both items, instead of a four-way choice | In a realistic state with near-duplicate items, a clearly finished item went from 0.52 to 0.73–0.75; unrelated items stay ≤0.12. Threshold 0.6. |
+
+  | `goal` (tasks) | Kept as first written; "directly move closer" and "sharing words is not enough" wordings did better on the tuning set but worse on a held-out one | 66 labelled tasks (4 projects with 1–5 goals each, plus near misses that only share a word with a goal), 3 runs each: 97.5% of answers right at P ≥ 0.5, 98.4% at P ≥ 0.6 with 95% of tasks filed. The misses are near misses: "Fix the typo in the login-code e-mail" filed under "Ship OAuth login" at 0.65–0.79. Threshold 0.6. |
+  | `serves_iNN` (goals) | "Does doing the task directly move new_item's end state closer?", with "separate work, even if it shares words" as the no side, instead of "Is the task a step towards new_item?". A choice among all the agent's goals (as for tasks) did worse here: 5/15 false positives | 49 labelled task–goal pairs, 3 runs: every true pair ≥ 0.64; false positives 3 of 69 answers at 0.6 (was 2 of 15 pairs, up to 0.92, on the tuning set; 2 of 8 on the held-out set, now 0). The remaining one: "Update the README badge" → "Deprecate the /v1 API" at ~0.79. |
 
   `same_as` (duplicates and overlaps at 1.0) and `importance` worked as first
   written. Thresholds on choice questions use the chosen option's
