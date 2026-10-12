@@ -513,3 +513,21 @@ pub fn prune_drops_goal_links_to_pruned_goals_test() {
   let assert Some(t) = state.get_item(s, t.id)
   assert t.goal == None
 }
+
+pub fn tasks_only_go_under_their_own_agents_goals_test() {
+  let #(s, a, b) = support.two_agents(now)
+  let #(s, mine) = state.create_item(s, a, support.goal("Mine"), now)
+  let #(s, theirs) = state.create_item(s, b, support.goal("Theirs"), now)
+  let #(s, t) = state.create_item(s, a, support.task("A task"), now)
+  assert t.goal == Some(mine.id)
+  let goal_of = fn(s) {
+    let assert Some(i) = state.get_item(s, t.id)
+    i.goal
+  }
+  // another agent's goal, a task, or a missing item: ignored
+  assert goal_of(state.set_task_goal(s, t.id, Some(theirs.id))) == Some(mine.id)
+  assert goal_of(state.set_task_goal(s, t.id, Some(t.id))) == Some(mine.id)
+  assert goal_of(state.set_task_goal(s, t.id, Some(9999))) == Some(mine.id)
+  assert goal_of(state.move_tasks(s, mine.id, theirs.id)) == Some(mine.id)
+  assert goal_of(state.set_task_goal(s, t.id, None)) == None
+}

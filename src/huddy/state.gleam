@@ -1004,21 +1004,33 @@ pub fn set_review_result(
 }
 
 /// File a task under one of its agent's goals (or under none). Changes no
-/// version: this is Huddy's classification, not the agent's content.
+/// version: this is Huddy's classification, not the agent's content. A
+/// task only ever goes under its own agent's goal; anything else is
+/// ignored.
 pub fn set_task_goal(state: State, task_id: Int, goal: Option(Int)) -> State {
   case get_item(state, task_id) {
     Some(i) if i.kind == model.Task && i.goal != goal ->
-      put_item(state, Item(..i, goal:))
+      case goal == None || is_goal_of(state, goal, i.agent) {
+        True -> put_item(state, Item(..i, goal:))
+        False -> state
+      }
     _ -> state
   }
 }
 
 /// Move the open tasks filed under goal `from` to goal `to` (a goal that
-/// replaces another takes over its tasks).
+/// replaces another takes over its tasks), when `to` is their agent's goal.
 pub fn move_tasks(state: State, from: Int, to: Int) -> State {
   open_items(state)
   |> list.filter(fn(i) { i.kind == model.Task && i.goal == Some(from) })
-  |> list.fold(state, fn(s, i) { put_item(s, Item(..i, goal: Some(to))) })
+  |> list.fold(state, fn(s, i) { set_task_goal(s, i.id, Some(to)) })
+}
+
+fn is_goal_of(state: State, goal: Option(Int), agent_id: Int) -> Bool {
+  case option.then(goal, get_item(state, _)) {
+    Some(g) -> g.kind == model.Goal && g.agent == agent_id
+    None -> False
+  }
 }
 
 /// The agent's open tasks not filed under one of its open goals.
