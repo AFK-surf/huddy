@@ -7,7 +7,7 @@
   const out = document.getElementById("doc-body");
   if (!src || !out || !window.marked || !window.DOMPurify) return;
 
-  const base = src.dataset.base; // e.g. "/docs/doc3"
+  const base = src.dataset.base; // e.g. "/docs/12-design-notes"
   const here = src.dataset.path || "index.md";
   const files = new Set((src.dataset.files || "").split("\n").filter(Boolean));
   const dir = here.includes("/") ? here.slice(0, here.lastIndexOf("/") + 1) : "";

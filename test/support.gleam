@@ -71,6 +71,7 @@ pub fn config(dir: String, port: Int) -> Config {
       comments_per_item: 100,
       comments_per_user_per_minute: 1000,
     ),
+    documents: config.Documents(public_links: True),
     retention: config.Retention(30, 90, 14, 90, 3),
   )
 }

@@ -611,7 +611,7 @@ fn doc_links(v: ItemView) -> Node {
       html.div(
         [html.class("docs")],
         list.map(docs, fn(d) {
-          let ref = model.doc_ref(d.0)
+          let ref = d.0
           html.a("/docs/" <> ref, [html.class("doclink")], [
             icon(sketch.DocIcon, ref),
             html.text(d.1),
@@ -715,14 +715,7 @@ fn goal(board: Board, g: rank.GoalGroup) -> Node {
   let p = g.primary
   html.div([html.class("goal"), html.id(model.item_ref(p.item.id))], [
     html.div([html.class("bubble sk")], [
-      html.raw(sketch.frame(
-        seed(p),
-        sketch.Rect,
-        320,
-        90,
-        "goal",
-        Some("goal-bg"),
-      )),
+      html.raw(sketch.frame(seed(p), sketch.Rect, 320, 90, "goal", None)),
       html.text(p.item.title),
       doc_links(p),
     ]),

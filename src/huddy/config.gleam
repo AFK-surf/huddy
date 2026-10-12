@@ -32,6 +32,7 @@ pub type Config {
     notify: Notify,
     display: Display,
     limits: Limits,
+    documents: Documents,
     retention: Retention,
   )
 }
@@ -144,6 +145,13 @@ pub type Limits {
     comment_max_chars: Int,
     comments_per_item: Int,
     comments_per_user_per_minute: Int,
+  )
+}
+
+pub type Documents {
+  Documents(
+    /// humans may share documents through public links that need no sign-in
+    public_links: Bool,
   )
 }
 
@@ -273,6 +281,14 @@ pub fn decoder() -> Decoder(Config) {
     limits_decoder(),
     Limits(120, 2000, 12, 20, 1000, 100, 12),
   )
+  use documents <- section(
+    "documents",
+    {
+      use public_links <- opt("public_links", True, decode.bool)
+      decode.success(Documents(public_links:))
+    },
+    Documents(public_links: True),
+  )
   use retention <- section(
     "retention",
     retention_decoder(),
@@ -304,6 +320,7 @@ pub fn decoder() -> Decoder(Config) {
     notify:,
     display:,
     limits:,
+    documents:,
     retention:,
   ))
 }

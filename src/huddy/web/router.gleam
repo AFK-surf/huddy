@@ -89,6 +89,7 @@ fn handle_web(ctx: Ctx, req: wisp.Request) -> wisp.Response {
     ["items", id, action], http.Post -> actions.handle(ctx, req, id, action)
     ["settings", ..rest], _ -> settings.handle(ctx, req, rest)
     ["docs", ..rest], _ -> docs.handle(ctx, req, rest)
+    ["shared", ..rest], _ -> docs.handle_public(ctx, req, rest)
     [".well-known", "oauth-protected-resource"], http.Get
     | [".well-known", "oauth-protected-resource", "mcp"], http.Get
     -> oauth.protected_resource(ctx)

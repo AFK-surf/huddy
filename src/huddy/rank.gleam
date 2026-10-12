@@ -48,8 +48,8 @@ pub type ItemView {
     overlap: Option(#(Int, String, String)),
     seen_by: Option(String),
     hidden_by: Option(String),
-    /// linked documents: id and title
-    docs: List(#(Int, String)),
+    /// linked documents: ref (`model.doc_ref`) and title
+    docs: List(#(String, String)),
     /// the item's thread, oldest first
     comments: List(CommentView),
     /// decisions: who answered last (the latest human comment)
@@ -382,7 +382,7 @@ fn item_view(
     hidden_by: option.map(item.hidden_by, state.handle_of(s, _)),
     docs: list.filter_map(item.docs, fn(id) {
       case state.get_document(s, id) {
-        Some(d) -> Ok(#(d.id, d.title))
+        Some(d) -> Ok(#(model.doc_ref(d), d.title))
         None -> Error(Nil)
       }
     }),

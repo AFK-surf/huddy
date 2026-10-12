@@ -13,6 +13,7 @@
 //// once the state change is durable.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/erlang/process
 import gleam/int
 import gleam/list
@@ -20,9 +21,12 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import huddy/blob.{type Location}
+import huddy/config
 import huddy/ctx.{type Ctx}
 import huddy/doc_lock
-import huddy/model.{type DocFile, type DocRevision, type Document, DocFile}
+import huddy/model.{
+  type DocFile, type DocRevision, type Document, type PublicLink, DocFile,
+}
 import huddy/state
 import huddy/store
 import huddy/sys
@@ -306,26 +310,28 @@ const lock_timeout_ms = 120_000
 /// (`replaces`, which must still be at the given revision). A new version is
 /// stored on the document's actor (`huddy/doc_lock`), after any other change
 /// to it. The title is `title`, else the first `# ` heading of index.md,
-/// else (for a new version) the previous title.
+/// else (for a new version) the previous title. A new document's slug is
+/// `slug`, else made from its title; a new version keeps its slug.
 pub fn upload(
   ctx: Ctx,
   agent_id: Int,
   upload: Upload,
   title: Option(String),
+  slug: Option(String),
   replaces: Option(DocRevision),
 ) -> Result(Stored, UploadError) {
   use unpacked <- result.try(
     unpack(upload, max_bytes(ctx)) |> result.map_error(NotStored),
   )
   case replaces {
-    None -> store_version(ctx, agent_id, unpacked, title, None)
+    None -> store_version(ctx, agent_id, unpacked, title, slug, None)
     Some(at) ->
       doc_lock.run(ctx.doc_locks, at.id, lock_timeout_ms, fn() {
         // refuse a stale revision before writing any files; put_document
         // checks again when recording the change
         case store.read(ctx.store, fn(s, _) { state.check_revision(s, at) }) {
           Error(reason) -> Error(NotStored(reason))
-          Ok(_) -> store_version(ctx, agent_id, unpacked, title, Some(at))
+          Ok(_) -> store_version(ctx, agent_id, unpacked, title, None, Some(at))
         }
       })
       |> result.map_error(fn(failure) {
@@ -343,6 +349,7 @@ fn store_version(
   agent_id: Int,
   unpacked: Unpacked,
   title: Option(String),
+  slug: Option(String),
   replaces: Option(DocRevision),
 ) -> Result(Stored, UploadError) {
   let limit = ctx.config.limits.title_max_chars
@@ -401,6 +408,8 @@ fn store_version(
           agent_id,
           state.NewDocument(
             title:,
+            slug: option.map(slug, model.doc_slug)
+              |> option.unwrap(model.doc_slug(title)),
             files: doc_files,
             storage_key: key,
             replaces:,
@@ -491,8 +500,97 @@ pub fn read_file(
   }
 }
 
-pub fn url(ctx: Ctx, doc_id: Int) -> String {
-  ctx.config.base_url <> "/docs/" <> model.doc_ref(doc_id)
+pub fn url(ctx: Ctx, doc: Document) -> String {
+  ctx.config.base_url <> "/docs/" <> model.doc_ref(doc)
+}
+
+// --- public links ------------------------------------------------------------------
+
+/// The secret in a public link: an HMAC of the link's nonce under the
+/// server's secret key. It is never stored, so the state file (and its
+/// backups) do not reveal public links, and changing the key revokes them.
+pub fn public_token(ctx: Ctx, link: PublicLink) -> String {
+  crypto.hmac(
+    bit_array.from_string("huddy public document link\n" <> link.nonce),
+    crypto.Sha256,
+    bit_array.from_string(ctx.config.secret_key),
+  )
+  |> bit_array.base64_url_encode(False)
+}
+
+/// The document's public link, if it is shared and public links are on.
+pub fn public_url(ctx: Ctx, doc: Document) -> Option(String) {
+  case ctx.config.documents.public_links, doc.public {
+    True, Some(link) ->
+      Some(ctx.config.base_url <> "/shared/" <> public_token(ctx, link))
+    _, _ -> None
+  }
+}
+
+/// The document a public link's token names. The link works while public
+/// links are on, the document stays shared, and the person who shared it is
+/// still on the allowlist.
+pub fn find_public(ctx: Ctx, token: String) -> Option(Document) {
+  case ctx.config.documents.public_links {
+    False -> None
+    True ->
+      store.read(ctx.store, fn(s, _) {
+        state.documents(s)
+        |> list.find(fn(d) {
+          case d.public {
+            Some(link) ->
+              sys.secure_equal(public_token(ctx, link), token)
+              && case state.user(s, link.by) {
+                Some(user) -> config.email_allowed(ctx.config, user.email)
+                None -> False
+              }
+            None -> False
+          }
+        })
+        |> option.from_result
+      })
+  }
+}
+
+/// Share a document publicly, or keep its link if it is already shared.
+/// The link works as soon as the change is in memory.
+pub fn share(
+  ctx: Ctx,
+  doc_id: Int,
+  sharer: state.Sharer,
+) -> Result(Document, String) {
+  let nonce = sys.random_token(16)
+  case
+    store.update_or_pending(ctx.store, fn(s, e, now) {
+      case state.share_document(s, doc_id, sharer, nonce, now) {
+        Ok(#(s, doc)) -> store.Changed(s, e, [], Ok(doc))
+        Error(reason) -> store.NoChange(Error(reason))
+      }
+    })
+  {
+    Ok(#(value, _)) -> value
+    Error(reason) -> Error(reason)
+  }
+}
+
+/// Stop sharing a document. The link stops working as soon as the change is
+/// in memory, even if writing it to storage has to be retried.
+pub fn unshare(
+  ctx: Ctx,
+  doc_id: Int,
+  sharer: state.Sharer,
+) -> Result(Document, String) {
+  case
+    store.update_or_pending(ctx.store, fn(s, e, now) {
+      case state.unshare_document(s, doc_id, sharer, now) {
+        Ok(#(s, doc)) -> store.Changed(s, e, [], Ok(doc))
+        Error(reason) -> store.NoChange(Error(reason))
+      }
+    })
+  {
+    Ok(#(value, _)) -> value
+    Error(reason) -> Error(reason)
+  }
 }
 
 /// "12 KB", "3.4 MB".
