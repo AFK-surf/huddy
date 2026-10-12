@@ -8,31 +8,52 @@
     const form = ev.target;
     if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-fetch")) return;
     ev.preventDefault();
-    // the clicked button's name/value (e.g. a decision option) goes along
-    const data = new FormData(form, ev.submitter || undefined);
+    // the clicked button's name/value (e.g. a decision option) goes along,
+    // also in browsers whose FormData ignores the submitter
+    const button = ev.submitter;
+    const data = new FormData(form);
+    if (button && button.name) data.set(button.name, button.value);
+    // a normal post, keeping the clicked button's value
+    const fallback = () => {
+      if (button && button.name) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = button.name;
+        input.value = button.value;
+        form.appendChild(input);
+      }
+      form.submit();
+    };
+    let res;
     try {
-      const res = await fetch(form.action, {
+      res = await fetch(form.action, {
         method: "POST",
         body: new URLSearchParams(data),
         headers: { "x-huddy-fetch": "1" },
         credentials: "same-origin",
       });
-      if (!res.ok) {
-        // show the server's reason (e.g. the item closed meanwhile)
-        if (res.status === 400 || res.status === 429) {
-          alert((await res.text()).replace(/^Bad request: /, "") || "That didn't work.");
-          return;
-        }
-        form.submit();
-        return;
-      }
-      if (form.hasAttribute("data-reset")) {
-        // clear it and close its <details>, so the held-back zone swap lands
-        form.reset();
-        form.closest("details")?.removeAttribute("open");
-      }
     } catch (_) {
-      form.submit();
+      fallback();
+      return;
+    }
+    if (res.redirected) {
+      // signed out: the post went to the login page and nothing was saved
+      alert("You're signed out, so this wasn't saved. Sign in again (your text is still here).");
+      return;
+    }
+    if (res.status === 400 || res.status === 429) {
+      // show the server's reason (e.g. the item closed meanwhile)
+      alert((await res.text()).replace(/^Bad request: /, "") || "That didn't work.");
+      return;
+    }
+    if (res.status !== 204) {
+      fallback();
+      return;
+    }
+    if (form.hasAttribute("data-reset")) {
+      // clear it and close its <details>, so the held-back zone swap lands
+      form.reset();
+      form.closest("details")?.removeAttribute("open");
     }
   });
 
@@ -46,14 +67,15 @@
     document.title = (n > 0 ? `(${n}) ` : "") + baseTitle;
   };
 
-  // Don't swap a zone the user is typing in or has a <details> open in;
-  // keep it pending and apply when they're done.
+  // Don't swap a zone the user is typing in or has a <details> open in
+  // (other than a thread's read-only "N earlier"); keep it pending and
+  // apply when they're done.
   const pending = new Map();
   const busy = (el) => {
     const active = document.activeElement;
     const typing =
       active && el.contains(active) && active.matches("input, textarea, select");
-    return typing || el.querySelector("details[open]") !== null;
+    return typing || el.querySelector("details[open]:not(.earlier)") !== null;
   };
   const apply = (html) => {
     const t = document.createElement("template");

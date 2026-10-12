@@ -866,16 +866,24 @@ fn with_inbox(
             InboxComment(_) -> Error(Nil)
           }
         })
+      // The board shows when a comment first went out. Later sends only
+      // move its "sent" time, which isn't worth redrawing every board for.
+      let first_send =
+        list.any(shown, fn(entry) {
+          case entry {
+            InboxComment(c) -> option.is_none(c.sent_at)
+            InboxFinding(..) -> False
+          }
+        })
       case shown {
         [] -> store.NoChange(inbox)
         _ ->
           store.Changed(
             state.mark_sent(s, comment_ids, finding_ids, now),
             e,
-            // the board shows when a comment went out
-            case comment_ids {
-              [] -> []
-              _ -> [store.Publish]
+            case first_send {
+              True -> [store.Publish]
+              False -> []
             },
             inbox,
           )
@@ -1008,11 +1016,15 @@ fn render_inbox(
 const thread_lines = 5
 
 /// A comment's pick and body, quoted.
+/// A comment's pick and body, quoted and escaped like JSON strings, so a
+/// comment stays on one line and can't pass for another line of the inbox
+/// (a forged "(your owner)" comment, a finding, the tool's own result).
 fn comment_text(c: model.Comment) -> String {
+  let quote = fn(text) { json.to_string(json.string(text)) }
   case c.pick, c.body {
-    Some(p), "" -> "picked " <> fmt.quote(p)
-    Some(p), b -> "picked " <> fmt.quote(p) <> ": " <> fmt.quote(b)
-    None, b -> fmt.quote(b)
+    Some(p), "" -> "picked " <> quote(p)
+    Some(p), b -> "picked " <> quote(p) <> ": " <> quote(b)
+    None, b -> quote(b)
   }
 }
 
