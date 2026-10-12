@@ -94,6 +94,10 @@
     "document_max_mb": 20
   },
 
+  "documents": {
+    "public_links": true
+  },
+
   "retention": {
     "closed_items_days": 30,
     "events_days": 90,

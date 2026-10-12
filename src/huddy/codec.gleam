@@ -13,7 +13,7 @@ import huddy/model.{
   type McpLink, type NextIds, type OAuthClient, type OAuthGrant, type OAuthToken,
   type State, type User, type WebSession, Agent, DocFile, Document, Event,
   Finding, Item, Judgment, McpLink, NextIds, OAuthClient, OAuthGrant, OAuthToken,
-  State, User, WebSession,
+  PublicLink, State, User, WebSession,
 }
 
 pub const format = 1
@@ -182,6 +182,7 @@ pub fn encode_item(i: Item) -> Json {
 pub fn encode_document(d: Document) -> Json {
   json.object([
     #("id", json.int(d.id)),
+    #("slug", json.string(d.slug)),
     #("agent", json.int(d.agent)),
     #("updated_by", json.int(d.updated_by)),
     #("title", json.string(d.title)),
@@ -200,6 +201,17 @@ pub fn encode_document(d: Document) -> Json {
     #("version", json.int(d.version)),
     #("created_at", json.int(d.created_at)),
     #("updated_at", json.int(d.updated_at)),
+    #(
+      "public",
+      opt(d.public, fn(p) {
+        json.object([
+          #("nonce", json.string(p.nonce)),
+          #("by", json.int(p.by)),
+          #("agent", opt(p.agent, json.int)),
+          #("at", json.int(p.at)),
+        ])
+      }),
+    ),
   ])
 }
 
@@ -516,6 +528,12 @@ pub fn document_decoder() -> Decoder(Document) {
   use agent <- decode.field("agent", decode.int)
   use updated_by <- decode.optional_field("updated_by", agent, decode.int)
   use title <- decode.field("title", decode.string)
+  // documents from before slugs get one from their title
+  use slug <- decode.optional_field(
+    "slug",
+    model.doc_slug(title),
+    decode.string,
+  )
   use files <- decode.field(
     "files",
     decode.list({
@@ -530,8 +548,24 @@ pub fn document_decoder() -> Decoder(Document) {
   use version <- decode.field("version", decode.int)
   use created_at <- decode.field("created_at", decode.int)
   use updated_at <- decode.field("updated_at", decode.int)
+  use public <- decode.optional_field(
+    "public",
+    None,
+    decode.optional({
+      use nonce <- decode.field("nonce", decode.string)
+      use by <- decode.field("by", decode.int)
+      use at <- decode.field("at", decode.int)
+      use agent <- decode.optional_field(
+        "agent",
+        None,
+        decode.optional(decode.int),
+      )
+      decode.success(PublicLink(nonce:, by:, agent:, at:))
+    }),
+  )
   decode.success(Document(
     id:,
+    slug:,
     agent:,
     updated_by:,
     title:,
@@ -541,6 +575,7 @@ pub fn document_decoder() -> Decoder(Document) {
     version:,
     created_at:,
     updated_at:,
+    public:,
   ))
 }
 
@@ -846,11 +881,34 @@ pub fn check_references(state: State) -> Result(Nil, String) {
           check(dict.has_key(state.agents, d.agent), "document agent", d.agent)
         {
           Ok(_) ->
-            check(
-              dict.has_key(state.agents, d.updated_by),
-              "document updated_by",
-              d.updated_by,
-            )
+            case
+              check(
+                dict.has_key(state.agents, d.updated_by),
+                "document updated_by",
+                d.updated_by,
+              )
+            {
+              Ok(_) ->
+                case
+                  opt_user(
+                    "document public link",
+                    option.map(d.public, fn(p) { p.by }),
+                  )
+                {
+                  Ok(_) ->
+                    case option.then(d.public, fn(p) { p.agent }) {
+                      Some(a) ->
+                        check(
+                          dict.has_key(state.agents, a),
+                          "document public link agent",
+                          a,
+                        )
+                      None -> Ok(Nil)
+                    }
+                  e -> e
+                }
+              e -> e
+            }
           e -> e
         }
       })

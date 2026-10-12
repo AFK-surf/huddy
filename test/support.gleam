@@ -68,6 +68,7 @@ pub fn config(dir: String, port: Int) -> Config {
       writes_per_agent_per_minute: 1000,
       document_max_mb: 2,
     ),
+    documents: config.Documents(public_links: True),
     retention: config.Retention(30, 90, 14, 90, 3),
   )
 }

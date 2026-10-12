@@ -5,6 +5,7 @@ import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option}
+import gleam/result
 import gleam/string
 
 pub type User {
@@ -92,6 +93,9 @@ pub type Item {
 pub type Document {
   Document(
     id: Int,
+    /// set when the document is created, never changed: its ref is
+    /// "<id>-<slug>" (see `doc_ref`); may be empty
+    slug: String,
     /// the agent that uploaded the first version
     agent: Int,
     /// the agent that uploaded the current version (any agent can)
@@ -106,6 +110,23 @@ pub type Document {
     version: Int,
     created_at: Int,
     updated_at: Int,
+    /// shared publicly: anyone with the link can read the current version
+    public: Option(PublicLink),
+  )
+}
+
+/// A document's public link. The link's token is derived from `nonce` and
+/// the server's secret key (see `documents.public_token`), so the state file
+/// alone does not reveal it, and rotating the key revokes every link.
+pub type PublicLink {
+  PublicLink(
+    nonce: String,
+    /// the user who shared it, or whose agent did; the link works while
+    /// they are on the allowlist
+    by: Int,
+    /// the agent that shared it, if an agent did
+    agent: Option(Int),
+    at: Int,
   )
 }
 
@@ -444,8 +465,65 @@ pub fn finding_ref(id: Int) -> String {
   "f" <> int.to_string(id)
 }
 
-pub fn doc_ref(id: Int) -> String {
-  "doc" <> int.to_string(id)
+/// A document as agents and URLs name it: "12-design-notes", or "12" when
+/// it has no slug.
+pub fn doc_ref(doc: Document) -> String {
+  case doc.slug {
+    "" -> int.to_string(doc.id)
+    slug -> int.to_string(doc.id) <> "-" <> slug
+  }
+}
+
+/// Parse a document ref ("12-design-notes", or just "12") into its id. The
+/// id alone names the document; the slug is not checked.
+pub fn parse_doc_ref(text: String) -> Result(Int, Nil) {
+  let text = string.trim(text)
+  case string.split_once(text, "-") {
+    Ok(#(id, _)) -> int.parse(id)
+    Error(_) -> int.parse(text)
+  }
+  |> result.try(fn(id) {
+    case id > 0 {
+      True -> Ok(id)
+      False -> Error(Nil)
+    }
+  })
+}
+
+pub const doc_slug_max = 60
+
+/// A document slug: lowercase ASCII letters and digits, everything else
+/// collapsed to single "-", at most `doc_slug_max` characters. Empty when
+/// the text has no letters or digits.
+pub fn doc_slug(text: String) -> String {
+  text
+  |> string.lowercase
+  |> string.to_graphemes
+  |> list.map(fn(c) {
+    case string.to_utf_codepoints(c) {
+      [cp] -> {
+        let n = string.utf_codepoint_to_int(cp)
+        case { n >= 97 && n <= 122 } || { n >= 48 && n <= 57 } {
+          True -> c
+          False -> "-"
+        }
+      }
+      _ -> "-"
+    }
+  })
+  |> string.concat
+  |> string.split("-")
+  |> list.filter(fn(part) { part != "" })
+  |> string.join("-")
+  |> string.slice(0, doc_slug_max)
+  |> trim_trailing_dash
+}
+
+fn trim_trailing_dash(s: String) -> String {
+  case string.ends_with(s, "-") {
+    True -> trim_trailing_dash(string.drop_end(s, 1))
+    False -> s
+  }
 }
 
 /// Parse "i41", "41", "f88" (with the given prefix) into an integer id.

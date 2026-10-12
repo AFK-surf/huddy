@@ -32,6 +32,7 @@ pub type Config {
     notify: Notify,
     display: Display,
     limits: Limits,
+    documents: Documents,
     retention: Retention,
   )
 }
@@ -141,6 +142,13 @@ pub type Limits {
     writes_per_agent_per_minute: Int,
     /// total size of a document's files, unzipped
     document_max_mb: Int,
+  )
+}
+
+pub type Documents {
+  Documents(
+    /// humans may share documents through public links that need no sign-in
+    public_links: Bool,
   )
 }
 
@@ -266,6 +274,14 @@ pub fn decoder() -> Decoder(Config) {
   use notify <- section("notify", notify_decoder(), Notify(browser: True))
   use display <- section("display", display_decoder(), default_display())
   use limits <- section("limits", limits_decoder(), Limits(120, 2000, 12, 20))
+  use documents <- section(
+    "documents",
+    {
+      use public_links <- opt("public_links", True, decode.bool)
+      decode.success(Documents(public_links:))
+    },
+    Documents(public_links: True),
+  )
   use retention <- section(
     "retention",
     retention_decoder(),
@@ -297,6 +313,7 @@ pub fn decoder() -> Decoder(Config) {
     notify:,
     display:,
     limits:,
+    documents:,
     retention:,
   ))
 }

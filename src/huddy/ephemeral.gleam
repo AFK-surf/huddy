@@ -54,6 +54,8 @@ pub type DocUpload {
   DocUpload(
     agent: Int,
     title: Option(String),
+    /// for a new document
+    slug: Option(String),
     /// a new version of this document at this revision
     replaces: Option(DocRevision),
     expires_at: Int,
