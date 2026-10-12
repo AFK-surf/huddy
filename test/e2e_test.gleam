@@ -19,8 +19,11 @@ import gleam/string
 import gleam/uri
 import huddy
 import huddy/blob
+import huddy/config.{type Config}
 import huddy/ctx.{type Ctx}
 import huddy/jev
+import huddy/model
+import huddy/net
 import huddy/persist
 import huddy/state
 import huddy/store
@@ -51,9 +54,13 @@ fn fake_ask(_state: json.Json, questions: List(#(String, jev.Question))) {
 }
 
 fn boot(port: Int) -> #(Ctx, Subject(Mail)) {
+  boot_with(port, fn(cfg) { cfg })
+}
+
+fn boot_with(port: Int, tweak: fn(Config) -> Config) -> #(Ctx, Subject(Mail)) {
   let dir = support.tmp_dir()
   let mails = process.new_subject()
-  let cfg = support.config(dir, port)
+  let cfg = tweak(support.config(dir, port))
   let overrides =
     huddy.Overrides(
       ask: Some(Some(fake_ask)),
@@ -631,6 +638,11 @@ pub fn oauth_flow_test() {
       call("huddy_read", json.object([])),
     )
   assert read.status == 200
+  let grant_ips =
+    store.read(ctx.store, fn(s, _) {
+      dict.values(s.oauth_grants) |> list.map(fn(g) { g.last_used_ip })
+    })
+  assert grant_ips == [Some("127.0.0.1")]
   // rotate, then reuse the old refresh token: the family is revoked
   let rotated =
     send(
@@ -657,6 +669,97 @@ pub fn oauth_flow_test() {
       call("huddy_read", json.object([])),
     )
   assert after.status == 401
+}
+
+fn link_ips(ctx: Ctx) -> List(Option(String)) {
+  store.read(ctx.store, fn(s, _) {
+    dict.values(s.mcp_links) |> list.map(fn(l) { l.last_used_ip })
+  })
+}
+
+pub fn link_records_client_ip_test() {
+  // an untrusted peer can't claim another address with X-Forwarded-For
+  let #(ctx, _) = boot(48_306)
+  let link = user_with_link(ctx, "alice@acme.dev", None)
+  assert link_ips(ctx) == [None]
+  let resp =
+    rpc(
+      link,
+      [#("x-forwarded-for", "203.0.113.7")],
+      call("huddy_read", json.object([])),
+    )
+  assert resp.status == 200
+  assert link_ips(ctx) == [Some("127.0.0.1")]
+}
+
+pub fn link_records_forwarded_client_ip_test() {
+  let assert Ok(local) = net.parse_cidr("127.0.0.1/32")
+  let assert Ok(proxy) = net.parse_cidr("10.0.0.0/8")
+  let #(ctx, _) =
+    boot_with(48_307, fn(cfg) {
+      config.Config(..cfg, trusted_proxies: [local, proxy])
+    })
+  let link = user_with_link(ctx, "alice@acme.dev", None)
+  let resp =
+    rpc(
+      link,
+      [#("x-forwarded-for", "198.51.100.1, 203.0.113.7, 10.1.2.3")],
+      call("huddy_read", json.object([])),
+    )
+  assert resp.status == 200
+  assert link_ips(ctx) == [Some("203.0.113.7")]
+}
+
+/// "Stored goal i3 for …" → "i3"
+fn goal_id(resp: Response(String)) -> String {
+  let assert Ok(#(_, rest)) = string.split_once(tool_text(resp), "Stored goal ")
+  let assert Ok(#(id, _)) = string.split_once(rest, " ")
+  id
+}
+
+pub fn several_goals_test() {
+  let #(ctx, _) = boot(48_308)
+  let link = user_with_link(ctx, "alice@acme.dev", Some(#("codex", "huddy")))
+  let set_goal = fn(fields) {
+    rpc(
+      link,
+      [],
+      call(
+        "huddy_set_goal",
+        json.object([#("project", json.string("huddy")), ..fields]),
+      ),
+    )
+  }
+  let first = set_goal([#("title", json.string("Ship OAuth login"))])
+  let first_id = goal_id(first)
+  let second = set_goal([#("title", json.string("Move state to S3"))])
+  let second_id = goal_id(second)
+  let third =
+    set_goal([
+      #("title", json.string("Ship OAuth and secret links")),
+      #("replaces", json.string(first_id)),
+    ])
+  assert string.contains(tool_text(third), "It replaces " <> first_id <> ".")
+  let third_id = goal_id(third)
+  let bad =
+    set_goal([
+      #("title", json.string("Again")),
+      #("replaces", json.string(first_id)),
+    ])
+  assert string.contains(tool_text(bad), "not an active goal")
+  let goals =
+    store.read(ctx.store, fn(s, _) {
+      dict.values(s.items)
+      |> list.map(fn(i) {
+        #(model.item_ref(i.id), model.state_to_string(i.state))
+      })
+      |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+    })
+  assert goals
+    == list.sort(
+      [#(first_id, "replaced"), #(second_id, "active"), #(third_id, "active")],
+      fn(a, b) { string.compare(a.0, b.0) },
+    )
 }
 
 pub fn concurrent_writes_are_durable_test() {

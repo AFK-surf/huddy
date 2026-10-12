@@ -541,12 +541,13 @@ pub fn token(ctx: Ctx, req: Request) -> Response {
       <> " verifier_len="
       <> int.to_string(string.length(value("code_verifier"))),
   )
-  case sys.rate_limit("oauth-ip:" <> session.client_ip(req), 60, 60_000) {
+  let ip = session.client_ip(req)
+  case sys.rate_limit("oauth-ip:" <> ip, 60, 60_000) {
     False -> token_error("slow_down", "too many requests")
     True ->
       case value("grant_type") {
-        "authorization_code" -> exchange_code(ctx, value)
-        "refresh_token" -> refresh(ctx, value)
+        "authorization_code" -> exchange_code(ctx, ip, value)
+        "refresh_token" -> refresh(ctx, ip, value)
         _ ->
           token_error(
             "unsupported_grant_type",
@@ -558,6 +559,7 @@ pub fn token(ctx: Ctx, req: Request) -> Response {
 
 fn issue(
   ctx: Ctx,
+  ip: String,
   grant_id: Int,
   scope: String,
   resource: String,
@@ -591,7 +593,7 @@ fn issue(
           expires_at: now + refresh_ttl,
           used_at: None,
         ))
-        |> state.touch_grant(grant_id, now)
+        |> state.touch_grant(grant_id, now, ip)
       store.Changed(s, e, [], Nil)
     })
   case stored {
@@ -622,7 +624,11 @@ fn issue(
   }
 }
 
-fn exchange_code(ctx: Ctx, value: fn(String) -> String) -> Response {
+fn exchange_code(
+  ctx: Ctx,
+  ip: String,
+  value: fn(String) -> String,
+) -> Response {
   let code_sha = sys.sha256_hex(value("code"))
   let entry =
     store.update_lazy(ctx.store, fn(_s, e, now) {
@@ -664,7 +670,7 @@ fn exchange_code(ctx: Ctx, value: fn(String) -> String) -> Response {
               })
             })
           case grant {
-            Ok(g) -> issue(ctx, g.id, c.scope, c.resource, None)
+            Ok(g) -> issue(ctx, ip, g.id, c.scope, c.resource, None)
             Error(_) -> token_error("invalid_grant", "the grant was revoked")
           }
         }
@@ -678,7 +684,7 @@ type Refresh {
   Invalid
 }
 
-fn refresh(ctx: Ctx, value: fn(String) -> String) -> Response {
+fn refresh(ctx: Ctx, ip: String, value: fn(String) -> String) -> Response {
   let sha = sys.sha256_hex(value("refresh_token"))
   let client_id = value("client_id")
   let outcome =
@@ -707,7 +713,7 @@ fn refresh(ctx: Ctx, value: fn(String) -> String) -> Response {
     })
   case outcome {
     Ok(Rotate(grant, scope, resource, family)) ->
-      issue(ctx, grant, scope, resource, Some(family))
+      issue(ctx, ip, grant, scope, resource, Some(family))
     Ok(Reused) ->
       token_error(
         "invalid_grant",
@@ -854,10 +860,11 @@ pub fn revoke(ctx: Ctx, req: Request) -> Response {
 }
 
 /// Validate a bearer token for the MCP endpoint: returns the user id and
-/// granted scope.
+/// granted scope. Records the use (time and client `ip`) on the grant.
 pub fn authenticate(
   ctx: Ctx,
   token: String,
+  ip: String,
 ) -> Option(#(model.User, String, Int)) {
   let sha = sys.sha256_hex(token)
   let now = sys.now_ms()
@@ -879,7 +886,7 @@ pub fn authenticate(
       case config.email_allowed(ctx.config, user.email) {
         True -> {
           store.update_lazy(ctx.store, fn(s, e, now) {
-            store.Changed(state.touch_grant(s, grant_id, now), e, [], Nil)
+            store.Changed(state.touch_grant(s, grant_id, now, ip), e, [], Nil)
           })
           Some(#(user, scope, grant_id))
         }

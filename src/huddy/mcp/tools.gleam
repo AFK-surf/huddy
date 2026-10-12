@@ -51,7 +51,7 @@ pub fn instructions(ctx: Ctx) -> String {
   "You report to Huddy, the heads-up display of the "
   <> ctx.config.team_name
   <> " team. Humans read it instead of your transcript.
-1. At the start of work call huddy_set_goal with one sentence describing the end state you're heading towards. Use the repository name as `project`.
+1. At the start of work call huddy_set_goal with one sentence describing the end state you're heading towards. Use the repository name as `project`. You can have several goals when you work towards distinct outcomes: add one per outcome, pass `replaces` when a goal supersedes an earlier one, and close a goal with huddy_update (achieved or abandoned) once you reach or drop it.
 2. Keep at most "
   <> int.to_string(r.open_tasks_guideline)
   <> " tasks open. Post a task (huddy_post) when you start a distinct piece of work; mark it `done` with huddy_update when finished.
@@ -342,14 +342,18 @@ pub fn definitions(ctx: Ctx, principal: Principal) -> List(Json) {
     ),
     tool(
       "huddy_set_goal",
-      "Set your goal",
-      "Set your one goal: the end state you're heading towards. Replaces your previous goal.",
+      "Add a goal",
+      "Add a goal: an end state you're heading towards. You can have several; your other goals stay open unless you pass `replaces`.",
       list.flatten([
         identity_props(),
         [
           title_schema("One sentence: the end state you're heading towards."),
           detail_schema,
           docs_schema,
+          string_prop(
+            "replaces",
+            "Optional: the id of one of your goals this one supersedes, e.g. \"i41\". It is closed as replaced.",
+          ),
         ],
       ]),
       required(["title"]),
@@ -766,30 +770,31 @@ fn create(
   ctx: Ctx,
   agent: Agent,
   new: state.NewItem,
+  replaces: Option(Int),
 ) -> #(ToolResult, Option(Int)) {
   let created =
     store.update(ctx.store, fn(s, e, now) {
-      case state.check_docs(s, new.docs) {
+      let replaced = case replaces {
+        Some(goal_id) -> state.replace_goal(s, agent.id, goal_id, now)
+        None -> Ok(s)
+      }
+      case result.try(state.check_docs(s, new.docs), fn(_) { replaced }) {
         Error(reason) -> store.NoChange(Error(reason))
-        Ok(_) -> {
-          let had_goal =
-            list.any(state.open_items_of(s, agent.id), fn(i) {
-              i.kind == model.Goal
-            })
+        Ok(s) -> {
           let #(s, item) = state.create_item(s, agent.id, new, now)
           let s = reviewer.check_open_counts(ctx, s, agent.id, now)
           let effects = case item.kind {
             model.Decision -> [store.Publish, store.NotifyDecision(item.id)]
             _ -> [store.Publish]
           }
-          store.Changed(s, e, effects, Ok(#(item, had_goal)))
+          store.Changed(s, e, effects, Ok(item))
         }
       }
     })
     |> result.flatten
   case created {
     Error(e) -> #(error("Not stored: " <> e), None)
-    Ok(#(item, had_goal)) -> {
+    Ok(item) -> {
       let done =
         reviewer.review_with_deadline(ctx, item.id, ctx.config.review.wait_ms)
       let ref = model.item_ref(item.id)
@@ -802,8 +807,11 @@ fn create(
         <> agent.label
         <> "."
         <> case item.kind {
-          model.Goal if had_goal -> " It replaces your previous goal."
-          model.Goal -> ""
+          model.Goal ->
+            case replaces {
+              Some(goal_id) -> " It replaces " <> model.item_ref(goal_id) <> "."
+              None -> ""
+            }
           model.Decision ->
             " Your human is notified; they will answer you in your session. Mark it resolved with huddy_update once answered."
           model.Task -> ""
@@ -837,10 +845,25 @@ fn create(
 fn set_goal(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
   let title = arg_title(args)
   let detail = arg_string(args, "detail")
-  case title, validate_text(ctx, title, detail, None), arg_docs(args) {
-    None, _, _ -> #(error("`title` is required."), None)
-    _, Error(e), _ | _, _, Error(e) -> #(error(e), None)
-    Some(t), Ok(_), Ok(docs) ->
+  let replaces = case non_empty(arg_string(args, "replaces")) {
+    Some(ref) ->
+      model.parse_ref(ref, "i")
+      |> result.map(Some)
+      |> result.replace_error("`replaces` must be a goal id like \"i41\".")
+    None -> Ok(None)
+  }
+  case
+    title,
+    validate_text(ctx, title, detail, None),
+    arg_docs(args),
+    replaces
+  {
+    None, _, _, _ -> #(error("`title` is required."), None)
+    _, Error(e), _, _ | _, _, Error(e), _ | _, _, _, Error(e) -> #(
+      error(e),
+      None,
+    )
+    Some(t), Ok(_), Ok(docs), Ok(replaces) ->
       create(
         ctx,
         agent,
@@ -852,6 +875,7 @@ fn set_goal(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
           [],
           option.unwrap(docs, []),
         ),
+        replaces,
       )
   }
 }
@@ -884,6 +908,7 @@ fn post(ctx: Ctx, agent: Agent, args: Args) -> #(ToolResult, Option(Int)) {
           option.unwrap(options, []),
           option.unwrap(docs, []),
         ),
+        None,
       )
   }
 }

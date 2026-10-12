@@ -259,6 +259,7 @@ fn encode_link(l: McpLink) -> Json {
     #("scope", json.string(l.scope)),
     #("created_at", json.int(l.created_at)),
     #("last_used_at", opt(l.last_used_at, json.int)),
+    #("last_used_ip", opt(l.last_used_ip, json.string)),
     #("revoked_at", opt(l.revoked_at, json.int)),
   ])
 }
@@ -290,6 +291,7 @@ fn encode_grant(g: OAuthGrant) -> Json {
     #("scope", json.string(g.scope)),
     #("created_at", json.int(g.created_at)),
     #("last_used_at", opt(g.last_used_at, json.int)),
+    #("last_used_ip", opt(g.last_used_ip, json.string)),
     #("revoked_at", opt(g.revoked_at, json.int)),
   ])
 }
@@ -640,6 +642,7 @@ fn link_decoder() -> Decoder(McpLink) {
   use scope <- decode.field("scope", decode.string)
   use created_at <- decode.field("created_at", decode.int)
   use last_used_at <- nullable("last_used_at", decode.int)
+  use last_used_ip <- nullable("last_used_ip", decode.string)
   use revoked_at <- nullable("revoked_at", decode.int)
   decode.success(McpLink(
     id:,
@@ -651,6 +654,7 @@ fn link_decoder() -> Decoder(McpLink) {
     scope:,
     created_at:,
     last_used_at:,
+    last_used_ip:,
     revoked_at:,
   ))
 }
@@ -695,6 +699,7 @@ fn grant_decoder() -> Decoder(OAuthGrant) {
   use scope <- decode.field("scope", decode.string)
   use created_at <- decode.field("created_at", decode.int)
   use last_used_at <- nullable("last_used_at", decode.int)
+  use last_used_ip <- nullable("last_used_ip", decode.string)
   use revoked_at <- nullable("revoked_at", decode.int)
   decode.success(OAuthGrant(
     id:,
@@ -703,6 +708,7 @@ fn grant_decoder() -> Decoder(OAuthGrant) {
     scope:,
     created_at:,
     last_used_at:,
+    last_used_ip:,
     revoked_at:,
   ))
 }

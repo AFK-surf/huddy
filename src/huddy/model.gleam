@@ -198,6 +198,7 @@ pub type McpLink {
     scope: String,
     created_at: Int,
     last_used_at: Option(Int),
+    last_used_ip: Option(String),
     revoked_at: Option(Int),
   )
 }
@@ -228,6 +229,7 @@ pub type OAuthGrant {
     scope: String,
     created_at: Int,
     last_used_at: Option(Int),
+    last_used_ip: Option(String),
     revoked_at: Option(Int),
   )
 }

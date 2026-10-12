@@ -221,7 +221,8 @@ fn page(
                   <> case g.last_used_at {
                     Some(t) -> " · used " <> fmt.ago(now, t)
                     None -> ""
-                  },
+                  }
+                  <> from_ip(g.last_used_ip),
                 ),
                 revoke_form(
                   "/settings/grants/" <> int.to_string(g.id) <> "/revoke",
@@ -325,7 +326,8 @@ fn links_section(
                 <> case l.last_used_at {
                   Some(t) -> " · used " <> fmt.ago(now, t)
                   None -> " · never used"
-                },
+                }
+                <> from_ip(l.last_used_ip),
               ),
               revoke_form(
                 "/settings/links/" <> int.to_string(l.id) <> "/revoke",
@@ -361,4 +363,11 @@ fn links_section(
       layout.button("Create URL", [#("type", "submit")]),
     ]),
   ])
+}
+
+fn from_ip(ip: Option(String)) -> String {
+  case ip {
+    Some(ip) -> " from " <> ip
+    None -> ""
+  }
 }
