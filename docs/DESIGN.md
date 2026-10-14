@@ -1210,6 +1210,7 @@ gleam.toml / manifest.toml / .tool-versions (erlang 29.0.6, gleam 1.19.1)
 huddy.example.json            annotated-by-example production config
 Dockerfile                    two-stage build → erlang:29-slim
 priv/static/                  huddy.css  huddy.js  huddy-doc.js  excalifont.woff2  nunito.woff2  favicon.svg
+                              pwa.js  sw.js  icon-*.png  icon-maskable.svg  apple-touch-icon.png
 src/
   huddy.gleam                 main: load config → load → supervise store, janitor, mist
   huddy_ffi.erl               atomic write, DNS, SMTP (gen_smtp), rate limiter, time
@@ -1238,6 +1239,7 @@ src/
   huddy/web/actions.gleam     seen/hide/unhide/comment  web/session.gleam  cookies, origin checks
   huddy/web/html.gleam        HTML builder     web/sketch.gleam    seeded rough SVG
   huddy/web/docs.gleam        document list/page/files/zip/delete/share, public view, one-time upload URL
+  huddy/web/pwa.gleam         installable app: /manifest.webmanifest, /sw.js, /offline
   huddy/oauth/server.gleam    metadata, authorize + consent, token, register, revoke
   huddy/oauth/cimd.gleam      Client ID Metadata Documents with SSRF guards
   huddy/mcp/transport.gleam   Streamable HTTP, dual-era handling, header validation, auth

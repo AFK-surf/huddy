@@ -5,3 +5,4 @@ erl_crash.dump
 /.env
 # screenshots are not committed
 *.png
+!/priv/static/*.png

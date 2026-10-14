@@ -1507,3 +1507,37 @@ fn get_bits(url: String, cookie: String) -> Response(BitArray) {
     httpc.configure() |> httpc.timeout(5000) |> httpc.dispatch_bits(req)
   resp
 }
+
+/// Installable as an app: every page links the manifest, which (like the
+/// service worker and the offline page) loads without signing in.
+pub fn installable_app_test() {
+  let #(ctx, _) = boot(28_320)
+  let login = send(http.Get, base(ctx) <> "/login", [], "")
+  assert string.contains(login.body, "href=\"/manifest.webmanifest\"")
+  assert string.contains(login.body, "src=\"/static/pwa.js\"")
+  let manifest = send(http.Get, base(ctx) <> "/manifest.webmanifest", [], "")
+  assert manifest.status == 200
+  assert header(manifest, "content-type") == "application/manifest+json"
+  let decoder = {
+    use start <- decode.field("start_url", decode.string)
+    use display <- decode.field("display", decode.string)
+    use icons <- decode.field(
+      "icons",
+      decode.list(decode.at(["src"], decode.string)),
+    )
+    decode.success(#(start, display, icons))
+  }
+  let assert Ok(#(start, display, icons)) = json.parse(manifest.body, decoder)
+  assert start == "/"
+  assert display == "standalone"
+  list.each(icons, fn(src) {
+    assert get_bits(base(ctx) <> src, "").status == 200
+  })
+  let sw = send(http.Get, base(ctx) <> "/sw.js", [], "")
+  assert sw.status == 200
+  assert string.starts_with(header(sw, "content-type"), "text/javascript")
+  assert string.contains(sw.body, "\"/offline\"")
+  let offline = send(http.Get, base(ctx) <> "/offline", [], "")
+  assert offline.status == 200
+  assert string.contains(offline.body, "You&#39;re offline")
+}

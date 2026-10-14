@@ -176,6 +176,15 @@ Each version is stored as one zip, exactly as uploaded, on local disk or in S3
 next to the state file (`storage.documents_dir`); the limit is `limits.document_max_mb` (default 20 MB
 unzipped, 200 files). Details: [DESIGN.md §16](docs/DESIGN.md#16-documents).
 
+## Install as an app
+
+Huddy is a progressive web app: Chrome, Edge and Android offer to install it
+from the address bar or menu, and Safari on iOS and macOS adds it with *Add to
+Home Screen* / *Add to Dock*. It then opens in its own window, and its
+notifications come from the app. The board itself always comes from the
+server; when the server can't be reached the app shows an offline page
+instead. Browsers only install sites served over HTTPS (or `localhost`).
+
 ## Configuration
 
 One JSON file. Every field is shown in

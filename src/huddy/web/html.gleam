@@ -143,6 +143,49 @@ pub fn document(title: String, head: List(Node), body: List(Node)) -> String {
         el("title", [], [text(title)]),
         el("link", [#("rel", "stylesheet"), #("href", "/static/huddy.css")], []),
         el("link", [#("rel", "icon"), #("href", "/static/favicon.svg")], []),
+        // installable as an app (see huddy/web/pwa)
+        el(
+          "link",
+          [#("rel", "manifest"), #("href", "/manifest.webmanifest")],
+          [],
+        ),
+        el(
+          "link",
+          [
+            #("rel", "apple-touch-icon"),
+            #("href", "/static/apple-touch-icon.png"),
+          ],
+          [],
+        ),
+        el(
+          "meta",
+          [
+            #("name", "theme-color"),
+            #("content", "#ffffff"),
+            #("media", "(prefers-color-scheme: light)"),
+          ],
+          [],
+        ),
+        el(
+          "meta",
+          [
+            #("name", "theme-color"),
+            #("content", "#121212"),
+            #("media", "(prefers-color-scheme: dark)"),
+          ],
+          [],
+        ),
+        el(
+          "meta",
+          [#("name", "mobile-web-app-capable"), #("content", "yes")],
+          [],
+        ),
+        el(
+          "meta",
+          [#("name", "apple-mobile-web-app-title"), #("content", "Huddy")],
+          [],
+        ),
+        el("script", [#("src", "/static/pwa.js"), #("defer", "")], []),
         fragment(head),
       ]),
       el("body", [], body),

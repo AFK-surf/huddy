@@ -17,6 +17,7 @@ import huddy/web/docs
 import huddy/web/layout
 import huddy/web/login
 import huddy/web/page
+import huddy/web/pwa
 import huddy/web/session
 import huddy/web/settings
 import huddy/web/sse
@@ -84,6 +85,9 @@ fn handle_web(ctx: Ctx, req: wisp.Request) -> wisp.Response {
   case wisp.path_segments(req), req.method {
     [], http.Get -> board(ctx, req)
     ["healthz"], _ -> wisp.ok() |> wisp.string_body("ok")
+    ["manifest.webmanifest"], http.Get -> pwa.manifest(ctx)
+    ["sw.js"], http.Get -> pwa.service_worker(ctx)
+    ["offline"], http.Get -> pwa.offline(ctx)
     ["login", ..rest], _ -> login.handle(ctx, req, rest)
     ["logout"], http.Post -> login.logout(ctx, req)
     ["items", id, action], http.Post -> actions.handle(ctx, req, id, action)
