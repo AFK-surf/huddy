@@ -116,6 +116,25 @@
   };
   setupNotify();
 
+  // Through the service worker where there is one: installed apps (and
+  // Android, which has no Notification constructor) only show those.
+  const notify = async (n) => {
+    const hash = "#" + n.tag.replace("huddy-d", "i");
+    const options = { body: n.body, tag: n.tag, icon: "/static/icon-192.png", data: { hash } };
+    const reg = "serviceWorker" in navigator && (await navigator.serviceWorker.getRegistration());
+    if (reg) return reg.showNotification(n.title, options);
+    const note = new Notification(n.title, options);
+    note.onclick = () => {
+      window.focus();
+      location.hash = hash;
+    };
+  };
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (e.data && e.data.huddy === "show") location.hash = e.data.hash;
+    });
+  }
+
   const url = board.dataset.events;
   const sep = url.includes("?") ? "&" : "?";
   const es = new EventSource(url + sep + "boot=" + encodeURIComponent(board.dataset.boot || ""));
@@ -130,13 +149,7 @@
         if (el) el.dataset.count = String(n.count);
         setTitle();
       }
-      if ("Notification" in window && Notification.permission === "granted") {
-        const note = new Notification(n.title, { body: n.body, tag: n.tag });
-        note.onclick = () => {
-          window.focus();
-          location.hash = n.tag.replace("huddy-d", "i");
-        };
-      }
+      if ("Notification" in window && Notification.permission === "granted") notify(n).catch(() => {});
     } catch (_) {}
   });
   es.addEventListener("reload", () => location.reload());
