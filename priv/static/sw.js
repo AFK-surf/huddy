@@ -1,9 +1,10 @@
 // Huddy's service worker. Pages always come from the network (they are live
 // and signed in); when the server can't be reached, the cached offline page
-// stands in. The offline page's own assets are kept for that, and refreshed
-// whenever the network serves them. Everything else (the event stream, posts,
+// stands in. Bundled fonts are served from cache; the other offline assets
+// are refreshed whenever the network serves them. Everything else (the event stream, posts,
 // documents, other origins) is left to the browser.
-const CACHE = "huddy-v1";
+// Bump this version when replacing a bundled font (fonts are cache-first).
+const CACHE = "huddy-v2";
 const OFFLINE = "/offline";
 const KEEP = [
   OFFLINE,
@@ -39,6 +40,17 @@ self.addEventListener("fetch", (ev) => {
       fetch(req).catch(() =>
         caches.match(OFFLINE).then((res) => res || Response.error()),
       ),
+    );
+  } else if (url.pathname === "/static/excalifont.woff2" || url.pathname === "/static/nunito.woff2") {
+    // Navigation must not wait on the network for fonts already installed.
+    ev.respondWith(
+      caches.open(CACHE).then(async (cache) => {
+        const cached = await cache.match(url.pathname);
+        if (cached) return cached;
+        const res = await fetch(req);
+        if (res.ok) await cache.put(url.pathname, res.clone());
+        return res;
+      }),
     );
   } else if (KEEP.includes(url.pathname)) {
     ev.respondWith(

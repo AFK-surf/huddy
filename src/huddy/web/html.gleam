@@ -141,6 +141,9 @@ pub fn document(title: String, head: List(Node), body: List(Node)) -> String {
           [],
         ),
         el("title", [], [text(title)]),
+        // Discover fonts before the stylesheet; anonymous CORS matches font requests.
+        font_preload("/static/excalifont.woff2"),
+        font_preload("/static/nunito.woff2"),
         el("link", [#("rel", "stylesheet"), #("href", "/static/huddy.css")], []),
         el("link", [#("rel", "icon"), #("href", "/static/favicon.svg")], []),
         // installable as an app (see huddy/web/pwa)
@@ -190,5 +193,19 @@ pub fn document(title: String, head: List(Node), body: List(Node)) -> String {
       ]),
       el("body", [], body),
     ]),
+  )
+}
+
+fn font_preload(href: String) -> Node {
+  el(
+    "link",
+    [
+      #("rel", "preload"),
+      #("href", href),
+      #("as", "font"),
+      #("type", "font/woff2"),
+      #("crossorigin", "anonymous"),
+    ],
+    [],
   )
 }
